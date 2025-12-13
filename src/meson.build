@@ -13,8 +13,21 @@ cuda_inc = include_directories('/usr/local/cuda/include')
 # Find nvcc compiler (try common paths)
 nvcc = find_program('nvcc', '/usr/local/cuda/bin/nvcc', '/usr/local/cuda-12.9/bin/nvcc', required: true)
 
+# Check if we need GCC 14 for nvcc (CUDA 12.x doesn't support GCC 15)
+cc = meson.get_compiler('c')
+gcc_version = cc.version().split('.')[0].to_int()
+nvcc_extra_args = []
+if gcc_version >= 15
+  gcc14 = find_program('gcc-14', required: false)
+  if gcc14.found()
+    nvcc_extra_args = ['--compiler-bindir=/usr/bin/gcc-14']
+    message('GCC @0@ detected, using GCC 14 for nvcc'.format(cc.version()))
+  else
+    warning('GCC 15+ detected but gcc-14 not found. CUDA compilation may fail.')
+  endif
+endif
+
 # Compile CUDA kernel to object file
-# Note: CUDA 12.9 requires GCC 14 (doesn't support GCC 15 type_traits yet)
 # Use -D flags to prevent glibc 2.41 sinpi/cospi noexcept conflicts
 cuda_kernel = custom_target(
   'cuda_nv12_to_bgrx',
@@ -25,8 +38,7 @@ cuda_kernel = custom_target(
             '-I/usr/local/cuda/include',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT=0',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT_C23=0',
-            '-Wno-deprecated-gpu-targets', '--compiler-bindir=/usr/bin/gcc-14'],
-  # Note: Add --compiler-bindir=/usr/bin/gcc-14 locally if GCC 15 installed
+            '-Wno-deprecated-gpu-targets'] + nvcc_extra_args,
   build_by_default: true
 )
 
