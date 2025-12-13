@@ -40,6 +40,10 @@ and other DMA-BUF consumers. Converts NV12 to BGRX using CUDA kernels.
 %autosetup -n %{name}-%{version}
 
 %build
+# Ensure /usr/local/cuda symlink points to the installed CUDA version
+if [ ! -L /usr/local/cuda ] && [ -d /usr/local/cuda-12.9 ]; then
+    ln -sf /usr/local/cuda-12.9 /usr/local/cuda
+fi
 %meson
 %meson_build
 
