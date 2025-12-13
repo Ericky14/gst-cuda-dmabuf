@@ -7,11 +7,31 @@ gbm_dep = dependency('gbm')
 drm_dep = dependency('libdrm')
 egl_dep = dependency('egl')
 
-# CUDA toolkit path
-cuda_inc = include_directories('/usr/local/cuda/include')
+# Detect CUDA toolkit path - check common locations
+cuda_paths = ['/usr/local/cuda', '/usr']
+cuda_path = ''
+foreach p : cuda_paths
+  if run_command('test', '-d', p / 'include/cuda_runtime.h'.split('/')[0], check: false).returncode() == 0
+    if run_command('test', '-f', p / 'include/cuda_runtime.h', check: false).returncode() == 0
+      cuda_path = p
+      break
+    endif
+  endif
+endforeach
+
+if cuda_path == ''
+  # Default fallback
+  cuda_path = '/usr/local/cuda'
+endif
+
+message('Using CUDA path: ' + cuda_path)
+
+cuda_inc = include_directories(cuda_path / 'include')
+cuda_lib_path = cuda_path / 'lib64'
+cuda_stubs_path = cuda_path / 'lib64/stubs'
 
 # Find nvcc compiler (try common paths)
-nvcc = find_program('nvcc', '/usr/local/cuda/bin/nvcc', '/usr/local/cuda-12.9/bin/nvcc', required: true)
+nvcc = find_program('nvcc', cuda_path / 'bin/nvcc', '/usr/local/cuda/bin/nvcc', required: true)
 
 # Check if we need GCC 14 for nvcc (CUDA 12.x doesn't support GCC 15)
 cc = meson.get_compiler('c')
@@ -35,7 +55,7 @@ cuda_kernel = custom_target(
   output: 'cuda_nv12_to_bgrx.o',
   command: [nvcc, '-c', '@INPUT@', '-o', '@OUTPUT@', 
             '-Xcompiler', '-fPIC',
-            '-I/usr/local/cuda/include',
+            '-I' + cuda_path / 'include',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT=0',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT_C23=0',
             '-Wno-deprecated-gpu-targets'] + nvcc_extra_args,
@@ -57,7 +77,7 @@ shared_library(
   objects: cuda_kernel,
   dependencies: [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep, gst_cuda_dep, gbm_dep, drm_dep, egl_dep],
   include_directories: cuda_inc,
-  link_args: ['-L/usr/local/cuda/lib64', '-L/usr/local/cuda/lib64/stubs', '-lcudart', '-lcuda'],
+  link_args: ['-L' + cuda_lib_path, '-L' + cuda_stubs_path, '-lcudart', '-lcuda'],
   install: true,
   install_dir: gst_dep.get_variable('pluginsdir')
 )
