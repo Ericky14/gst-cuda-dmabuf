@@ -17,20 +17,25 @@ jobs:
       matrix:
         cuda-version:
           - "12.9.0"
+          - "12.8.0"
           - "12.6.0"
+          - "12.5.1"
           - "12.5.0"
           - "12.4.0"
-          - "12.3.0"
         include:
+          # Ubuntu 24.04 images (CUDA 12.5.1+)
           - cuda-version: "12.9.0"
+            ubuntu: "ubuntu24.04"
+          - cuda-version: "12.8.0"
             ubuntu: "ubuntu24.04"
           - cuda-version: "12.6.0"
             ubuntu: "ubuntu24.04"
-          - cuda-version: "12.5.0"
+          - cuda-version: "12.5.1"
             ubuntu: "ubuntu24.04"
-          - cuda-version: "12.4.0"
+          # Ubuntu 22.04 images (older CUDA)
+          - cuda-version: "12.5.0"
             ubuntu: "ubuntu22.04"
-          - cuda-version: "12.3.0"
+          - cuda-version: "12.4.0"
             ubuntu: "ubuntu22.04"
 
     container:
