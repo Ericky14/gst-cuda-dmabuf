@@ -4,12 +4,15 @@
 BUILD_DIR = builddir
 PLUGIN_PATH = $(BUILD_DIR)/src
 TEST_VIDEO = $(HOME)/veil.mp4
+VERSION = $(shell grep "version:" meson.build | head -1 | sed "s/.*version: '\([^']*\)'.*/\1/")
+RPM_BUILD_DIR = $(CURDIR)/rpmbuild
 
 # Export plugin path for all targets
 export GST_PLUGIN_PATH := $(CURDIR)/$(PLUGIN_PATH):$(GST_PLUGIN_PATH)
 
 .PHONY: all build clean rebuild install test test-fakesink test-waylandsink \
-        profile profile-stats profile-gui inspect caps help
+        profile profile-stats profile-gui inspect caps help \
+        rpm rpm-prep rpm-build rpm-clean srpm
 
 # =============================================================================
 # Build targets
@@ -30,6 +33,43 @@ rebuild: clean build
 
 install:
 	ninja -C $(BUILD_DIR) install
+
+# =============================================================================
+# RPM Package targets
+# =============================================================================
+
+rpm-prep:
+	@echo "Creating RPM build directories..."
+	@mkdir -p $(RPM_BUILD_DIR)/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+	@echo "Creating source tarball..."
+	@mkdir -p /tmp/gst-cuda-dmabuf-$(VERSION)
+	@tar --exclude='.git' --exclude='builddir' --exclude='rpmbuild' --exclude='target' \
+		--exclude='*.tar.gz' --exclude='*.rpm' --exclude='*.nsys-rep' \
+		-czf $(RPM_BUILD_DIR)/SOURCES/gst-cuda-dmabuf-$(VERSION).tar.gz \
+		--transform="s,^,gst-cuda-dmabuf-$(VERSION)/," \
+		--exclude='gst-cuda-dmabuf-*.tar.gz' .
+	@cp gst-cuda-dmabuf.spec $(RPM_BUILD_DIR)/SPECS/
+	@echo "Source tarball created: $(RPM_BUILD_DIR)/SOURCES/gst-cuda-dmabuf-$(VERSION).tar.gz"
+
+srpm: rpm-prep
+	@echo "Building SRPM..."
+	rpmbuild -bs --define "_topdir $(RPM_BUILD_DIR)" \
+		$(RPM_BUILD_DIR)/SPECS/gst-cuda-dmabuf.spec
+	@echo ""
+	@echo "SRPM created:"
+	@ls -lh $(RPM_BUILD_DIR)/SRPMS/*.src.rpm
+
+rpm: rpm-prep
+	@echo "Building RPM for version $(VERSION)..."
+	rpmbuild -bb --define "_topdir $(RPM_BUILD_DIR)" \
+		$(RPM_BUILD_DIR)/SPECS/gst-cuda-dmabuf.spec
+	@echo ""
+	@echo "RPMs created:"
+	@ls -lh $(RPM_BUILD_DIR)/RPMS/*/*.rpm
+
+rpm-clean:
+	@echo "Cleaning RPM build directory..."
+	rm -rf $(RPM_BUILD_DIR)
 
 # =============================================================================
 # Test targets
@@ -167,6 +207,11 @@ help:
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make rebuild        - Clean and rebuild"
 	@echo "  make install        - Install the plugin"
+	@echo ""
+	@echo "RPM Package targets:"
+	@echo "  make rpm            - Build binary RPM"
+	@echo "  make srpm           - Build source RPM"
+	@echo "  make rpm-clean      - Clean RPM build directory"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test           - Test with waylandsink (default)"

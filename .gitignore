@@ -43,6 +43,11 @@ subprojects/packagecache/
 *.out
 *.app
 
+# RPM packaging
+rpmbuild/
+*.rpm
+*.src.rpm
+
 # =========================
 # Debug / profiling
 # =========================

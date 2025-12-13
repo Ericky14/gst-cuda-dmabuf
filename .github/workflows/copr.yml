@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Ericky
+
+name: Fedora Copr
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  copr-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*version: '\([^']*\)'.*/\1/")
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Create source tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p /tmp/gst-cuda-dmabuf-${VERSION}
+          tar --exclude='.git' --exclude='builddir' --exclude='target' \
+              -czf /tmp/gst-cuda-dmabuf-${VERSION}.tar.gz \
+              --transform="s,^,gst-cuda-dmabuf-${VERSION}/," \
+              --exclude='gst-cuda-dmabuf-*.tar.gz' .
+          mv /tmp/gst-cuda-dmabuf-${VERSION}.tar.gz .
+
+      - name: Install Copr CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install copr-cli
+
+      - name: Configure Copr
+        run: |
+          mkdir -p ~/.config
+          cat > ~/.config/copr << EOF
+          [copr-cli]
+          login = ${{ secrets.COPR_LOGIN }}
+          username = ${{ secrets.COPR_USERNAME }}
+          token = ${{ secrets.COPR_TOKEN }}
+          copr_url = https://copr.fedorainfracloud.org
+          EOF
+          chmod 600 ~/.config/copr
+
+      - name: Build in Copr
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Update spec file with correct version
+          sed -i "s/^Version:.*/Version:        ${VERSION}/" gst-cuda-dmabuf.spec
+          
+          # Build SRPM
+          copr-cli build ${{ secrets.COPR_PROJECT }} \
+            --nowait \
+            gst-cuda-dmabuf-${VERSION}.tar.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-tarball
+          path: gst-cuda-dmabuf-*.tar.gz

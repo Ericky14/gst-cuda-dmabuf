@@ -25,7 +25,7 @@ cuda_kernel = custom_target(
             '-I/usr/local/cuda/include',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT=0',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT_C23=0',
-            '-Wno-deprecated-gpu-targets'],
+            '-Wno-deprecated-gpu-targets', '--compiler-bindir=/usr/bin/gcc-14'],
   # Note: Add --compiler-bindir=/usr/bin/gcc-14 locally if GCC 15 installed
   build_by_default: true
 )
