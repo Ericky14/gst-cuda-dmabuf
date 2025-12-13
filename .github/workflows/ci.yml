@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     container:
-      image: nvidia/cuda:12.6.0-devel-ubuntu24.04
+      image: nvidia/cuda:12.9.0-devel-ubuntu24.04
 
     steps:
       - name: Checkout
@@ -27,6 +27,7 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-tools \
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev

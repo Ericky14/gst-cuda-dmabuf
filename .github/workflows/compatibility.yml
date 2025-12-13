@@ -16,12 +16,14 @@ jobs:
       fail-fast: false
       matrix:
         cuda-version:
+          - "12.9.0"
           - "12.6.0"
           - "12.5.0"
           - "12.4.0"
           - "12.3.0"
-          - "12.2.0"
         include:
+          - cuda-version: "12.9.0"
+            ubuntu: "ubuntu24.04"
           - cuda-version: "12.6.0"
             ubuntu: "ubuntu24.04"
           - cuda-version: "12.5.0"
@@ -29,8 +31,6 @@ jobs:
           - cuda-version: "12.4.0"
             ubuntu: "ubuntu22.04"
           - cuda-version: "12.3.0"
-            ubuntu: "ubuntu22.04"
-          - cuda-version: "12.2.0"
             ubuntu: "ubuntu22.04"
 
     container:
@@ -48,6 +48,7 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-tools \
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
@@ -72,7 +73,7 @@ jobs:
 
     runs-on: ubuntu-latest
     container:
-      image: nvidia/cuda:12.6.0-devel-${{ matrix.os == 'ubuntu-22.04' && 'ubuntu22.04' || 'ubuntu24.04' }}
+      image: nvidia/cuda:12.9.0-devel-${{ matrix.os == 'ubuntu-22.04' && 'ubuntu22.04' || 'ubuntu24.04' }}
 
     steps:
       - name: Checkout
@@ -86,6 +87,7 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-tools \
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
@@ -113,13 +115,13 @@ jobs:
         run: |
           GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
 
-  # Test with latest NVIDIA container (bleeding edge)
+  # Test with CUDA 12.9
   latest-cuda:
     runs-on: ubuntu-24.04
     continue-on-error: true  # Don't fail the whole workflow if bleeding edge breaks
 
     container:
-      image: nvidia/cuda:12-devel-ubuntu24.04  # Floating tag for latest 12.x
+      image: nvidia/cuda:12.9.0-devel-ubuntu24.04
 
     steps:
       - name: Checkout
@@ -133,6 +135,7 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-tools \
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
