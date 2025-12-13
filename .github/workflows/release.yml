@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Ericky
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create source tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          tar --exclude='.git' --exclude='builddir' --exclude='target' --exclude='dist' \
+              -czf dist/gst-cuda-dmabuf-${VERSION}.tar.gz \
+              --transform="s,^,gst-cuda-dmabuf-${VERSION}/," .
+          
+          # Create checksum
+          cd dist
+          sha256sum gst-cuda-dmabuf-${VERSION}.tar.gz > gst-cuda-dmabuf-${VERSION}.tar.gz.sha256
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "## Changes since $PREV_TAG" > RELEASE_NOTES.md
+            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> RELEASE_NOTES.md
+          else
+            echo "## Initial Release" > RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+            echo "First release of gst-cuda-dmabuf plugin." >> RELEASE_NOTES.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: |
+            dist/gst-cuda-dmabuf-${{ steps.version.outputs.version }}.tar.gz
+            dist/gst-cuda-dmabuf-${{ steps.version.outputs.version }}.tar.gz.sha256
+            gst-cuda-dmabuf.spec
