@@ -74,7 +74,7 @@ gst_gbm_dmabuf_pool_alloc_buffer(GstBufferPool *pool,
     /* Try to create with the requested modifier first (for zero-copy scanout) */
     if (p->modifier != DRM_FORMAT_MOD_INVALID && p->modifier != DRM_FORMAT_MOD_LINEAR)
     {
-        uint64_t modifiers[] = { p->modifier };
+        uint64_t modifiers[] = {p->modifier};
         bo = gbm_bo_create_with_modifiers(
             p->gbm,
             width,
@@ -82,7 +82,7 @@ gst_gbm_dmabuf_pool_alloc_buffer(GstBufferPool *pool,
             p->gbm_format,
             modifiers,
             1);
-        
+
         if (bo)
         {
             g_print("GBM: Created buffer with modifier 0x%016lx\n", p->modifier);
