@@ -57,7 +57,7 @@ shared_library(
   objects: cuda_kernel,
   dependencies: [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep, gst_cuda_dep, gbm_dep, drm_dep, egl_dep],
   include_directories: cuda_inc,
-  link_args: ['-L/usr/local/cuda/lib64', '-lcudart', '-lcuda'],
+  link_args: ['-L/usr/local/cuda/lib64', '-L/usr/local/cuda/lib64/stubs', '-lcudart', '-lcuda'],
   install: true,
   install_dir: gst_dep.get_variable('pluginsdir')
 )
