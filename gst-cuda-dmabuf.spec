@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2025 Ericky
 
 Name:           gst-cuda-dmabuf
-Version:        0.1.0
+Version:        1.0.0
 Release:        1%{?dist}
 Summary:        GStreamer CUDA DMA-BUF plugin for zero-copy video processing
 
@@ -49,5 +49,7 @@ and other DMA-BUF consumers. Converts NV12 to BGRX using CUDA kernels.
 %{_libdir}/gstreamer-1.0/libgstcudadmabuf.so
 
 %changelog
+* Sat Dec 13 2025 Ericky <ericky_k_y@hotmail.com> - 1.0.0-1
+- Version bump to 1.0.0
 * Fri Dec 13 2024 Ericky <ericky_k_y@hotmail.com> - 0.1.0-1
 - Initial package
