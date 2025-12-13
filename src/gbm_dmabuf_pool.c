@@ -133,10 +133,12 @@ gst_gbm_dmabuf_pool_alloc_buffer(GstBufferPool *pool,
     GstBuffer *buf = gst_buffer_new();
     gst_buffer_append_memory(buf, mem);
 
+    /* Add video meta with actual BGRx format for proper stride/offset handling.
+     * DMA_DRM is a caps-level concept; video meta needs the real pixel format. */
     GstVideoMeta *vmeta = gst_buffer_add_video_meta(
         buf,
         GST_VIDEO_FRAME_FLAG_NONE,
-        GST_VIDEO_FORMAT_DMA_DRM,
+        GST_VIDEO_FORMAT_BGRx,
         width,
         height);
 

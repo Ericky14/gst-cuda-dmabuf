@@ -137,11 +137,11 @@ buffer_transform_nv12_passthrough(BufferTransformContext *btx,
     *outbuf = gst_buffer_new();
     gst_buffer_append_memory(*outbuf, dmabuf_mem);
 
-    /* Add video meta */
+    /* Add video meta with actual NV12 format for proper stride/offset handling */
     gsize offsets[4] = {0, pool_buf->offsets[1], 0, 0};
     gint strides[4] = {(gint)pool_buf->strides[0], (gint)pool_buf->strides[1], 0, 0};
     gst_buffer_add_video_meta_full(*outbuf, GST_VIDEO_FRAME_FLAG_NONE,
-                                   GST_VIDEO_FORMAT_DMA_DRM, width, height, 2, offsets, strides);
+                                   GST_VIDEO_FORMAT_NV12, width, height, 2, offsets, strides);
 
     /* Copy timestamps */
     GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);
@@ -229,10 +229,11 @@ buffer_transform_nv12_to_bgrx(BufferTransformContext *btx,
     *outbuf = gst_buffer_new();
     gst_buffer_append_memory(*outbuf, dmabuf_mem);
 
+    /* Add video meta with actual BGRx format for proper stride/offset handling */
     gsize offsets[4] = {0, 0, 0, 0};
     gint strides[4] = {(gint)cuda_pitch, 0, 0, 0};
     gst_buffer_add_video_meta_full(*outbuf, GST_VIDEO_FRAME_FLAG_NONE,
-                                   GST_VIDEO_FORMAT_DMA_DRM, width, height, 1, offsets, strides);
+                                   GST_VIDEO_FORMAT_BGRx, width, height, 1, offsets, strides);
 
     /* Copy timestamps */
     GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);

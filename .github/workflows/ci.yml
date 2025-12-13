@@ -39,6 +39,10 @@ jobs:
           meson setup builddir
           ninja -C builddir
 
+      - name: Run tests
+        run: |
+          meson test -C builddir --print-errorlogs
+
       - name: Verify plugin
         run: |
           # Check plugin was built
