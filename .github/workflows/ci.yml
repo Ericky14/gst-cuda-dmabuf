@@ -24,7 +24,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            meson ninja-build gcc g++ pkg-config \
+            python3-pip ninja-build gcc g++ pkg-config \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
@@ -32,6 +32,7 @@ jobs:
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
+          pip3 install meson
 
       - name: Build
         run: |
