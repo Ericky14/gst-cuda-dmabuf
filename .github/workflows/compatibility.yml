@@ -32,11 +32,6 @@ jobs:
             ubuntu: "ubuntu24.04"
           - cuda-version: "12.5.1"
             ubuntu: "ubuntu24.04"
-          # Ubuntu 22.04 images (older CUDA)
-          - cuda-version: "12.5.0"
-            ubuntu: "ubuntu22.04"
-          - cuda-version: "12.4.0"
-            ubuntu: "ubuntu22.04"
 
     container:
       image: nvidia/cuda:${{ matrix.cuda-version }}-devel-${{ matrix.ubuntu }}
@@ -73,14 +68,10 @@ jobs:
   gstreamer-versions:
     strategy:
       fail-fast: false
-      matrix:
-        os:
-          - ubuntu-22.04
-          - ubuntu-24.04
 
     runs-on: ubuntu-latest
     container:
-      image: nvidia/cuda:12.9.0-devel-${{ matrix.os == 'ubuntu-22.04' && 'ubuntu22.04' || 'ubuntu24.04' }}
+      image: nvidia/cuda:12.9.0-devel-ubuntu24.04
 
     steps:
       - name: Checkout
