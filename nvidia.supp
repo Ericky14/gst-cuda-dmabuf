@@ -1,0 +1,284 @@
+# Valgrind suppression file for NVIDIA proprietary drivers
+# These are known false positives in closed-source NVIDIA libraries
+
+# NVIDIA CUVID (video decoder)
+{
+   nvidia_cuvid_cond
+   Memcheck:Cond
+   ...
+   obj:*/libnvcuvid.so*
+}
+
+{
+   nvidia_cuvid_value
+   Memcheck:Value8
+   ...
+   obj:*/libnvcuvid.so*
+}
+
+{
+   nvidia_cuvid_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvcuvid.so*
+}
+
+# NVIDIA EGL core
+{
+   nvidia_eglcore_cond
+   Memcheck:Cond
+   ...
+   obj:*/libnvidia-eglcore.so*
+}
+
+{
+   nvidia_eglcore_value
+   Memcheck:Value8
+   ...
+   obj:*/libnvidia-eglcore.so*
+}
+
+{
+   nvidia_eglcore_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvidia-eglcore.so*
+}
+
+# NVIDIA EGL
+{
+   nvidia_egl_cond
+   Memcheck:Cond
+   ...
+   obj:*/libEGL_nvidia.so*
+}
+
+{
+   nvidia_egl_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libEGL_nvidia.so*
+}
+
+# NVIDIA CUDA driver
+{
+   nvidia_cuda_cond
+   Memcheck:Cond
+   ...
+   obj:*/libcuda.so*
+}
+
+{
+   nvidia_cuda_value
+   Memcheck:Value8
+   ...
+   obj:*/libcuda.so*
+}
+
+{
+   nvidia_cuda_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libcuda.so*
+}
+
+# NVIDIA OpenGL
+{
+   nvidia_gl_cond
+   Memcheck:Cond
+   ...
+   obj:*/libnvidia-glcore.so*
+}
+
+{
+   nvidia_gl_leak
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvidia-glcore.so*
+}
+
+# GLib internals (intentional caches, not leaks)
+{
+   glib_quark_init
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:g_quark_init
+}
+
+{
+   glib_thread_pool
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:g_thread_pool_spawn_thread
+}
+
+{
+   glib_worker_context
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:g_get_worker_context
+}
+
+# Mesa/GBM internals
+{
+   mesa_xmlconfig
+   Memcheck:Leak
+   match-leak-kinds: definite,possible
+   ...
+   fun:_gbm_create_device
+}
+
+{
+   mesa_loader
+   Memcheck:Leak
+   match-leak-kinds: definite,possible
+   ...
+   fun:load_backend_by_name
+}
+
+# NVIDIA GLX
+{
+   nvidia_glx_init
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libGLX_nvidia.so*
+}
+
+# GLib internals (intentional caches, not leaks)
+{
+   glib_quark_init
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:g_quark_init
+}
+
+{
+   glib_thread_pool
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:g_thread_pool_spawn_thread
+}
+
+{
+   glib_worker_context
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:g_get_worker_context
+}
+
+# Mesa/GBM internals
+{
+   mesa_xmlconfig
+   Memcheck:Leak
+   match-leak-kinds: definite,possible
+   ...
+   fun:_gbm_create_device
+}
+
+{
+   mesa_loader
+   Memcheck:Leak
+   match-leak-kinds: definite,possible
+   ...
+   fun:load_backend_by_name
+}
+
+# NVIDIA GLX
+{
+   nvidia_glx_init
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libGLX_nvidia.so*
+}
+
+# GLib thread-local storage
+{
+   glib_private_set
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:g_private_set*
+}
+
+# EGL vendor loader cache
+{
+   egl_vendor_loader
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   fun:LoadVendor*
+}
+
+# NVRTC (CUDA runtime compiler)
+{
+   nvrtc_init
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvrtc.so*
+}
+
+# NVIDIA GPU compute library
+{
+   nvidia_gpucomp
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   obj:*/libnvidia-gpucomp.so*
+}
+
+# Dynamic linker init (NVIDIA libraries)
+{
+   dl_init
+   Memcheck:Leak
+   match-leak-kinds: all
+   ...
+   fun:_dl_init
+}
+
+# GLib sysprof/tracing
+{
+   glib_sysprof
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:sysprof_collector*
+}
+
+{
+   glib_trace
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:g_trace_mark*
+}
+
+# GStreamer task pool (internal thread management)
+{
+   gst_taskpool
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:gst_task_init
+}
+
+{
+   gst_taskpool2
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:default_prepare
+}

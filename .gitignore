@@ -110,3 +110,5 @@ compile_commands.json
 
 .env
 .env.*
+
+report*
