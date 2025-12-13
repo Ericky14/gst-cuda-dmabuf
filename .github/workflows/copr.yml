@@ -40,10 +40,10 @@ jobs:
               --exclude='gst-cuda-dmabuf-*.tar.gz' .
           mv /tmp/gst-cuda-dmabuf-${VERSION}.tar.gz .
 
-      - name: Install Copr CLI
+      - name: Install Copr CLI and RPM tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip
+          sudo apt-get install -y python3-pip rpm
           pip3 install copr-cli
 
       - name: Configure Copr
@@ -58,17 +58,35 @@ jobs:
           EOF
           chmod 600 ~/.config/copr
 
-      - name: Build in Copr
+      - name: Build SRPM and submit to Copr
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           
           # Update spec file with correct version
           sed -i "s/^Version:.*/Version:        ${VERSION}/" gst-cuda-dmabuf.spec
           
+          # Setup rpmbuild directories
+          mkdir -p ~/rpmbuild/{SOURCES,SPECS,SRPMS}
+          
+          # Copy tarball to SOURCES
+          cp gst-cuda-dmabuf-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+          
+          # Copy spec to SPECS
+          cp gst-cuda-dmabuf.spec ~/rpmbuild/SPECS/
+          
           # Build SRPM
+          rpmbuild -bs ~/rpmbuild/SPECS/gst-cuda-dmabuf.spec \
+            --define "_topdir $HOME/rpmbuild" \
+            --define "_sourcedir $HOME/rpmbuild/SOURCES"
+          
+          # Find the SRPM
+          SRPM=$(find ~/rpmbuild/SRPMS -name "*.src.rpm" | head -1)
+          echo "Built SRPM: $SRPM"
+          
+          # Submit to Copr
           copr-cli build ${{ secrets.COPR_PROJECT }} \
             --nowait \
-            gst-cuda-dmabuf-${VERSION}.tar.gz
+            "$SRPM"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
