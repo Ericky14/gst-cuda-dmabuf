@@ -33,6 +33,11 @@ cuda_kernel = custom_target(
 shared_library(
   'gstcudadmabuf',
   [
+    'drm_format_utils.c',
+    'cuda_egl_interop.c',
+    'pooled_buffers.c',
+    'caps_transform.c',
+    'buffer_transform.c',
     'gbm_dmabuf_pool.c',
     'gstcudadmabufupload.c',
     'plugin.c',
