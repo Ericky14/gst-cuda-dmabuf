@@ -7,15 +7,13 @@ gbm_dep = dependency('gbm')
 drm_dep = dependency('libdrm')
 egl_dep = dependency('egl')
 
-# Detect CUDA toolkit path - check common locations
-cuda_paths = ['/usr/local/cuda', '/usr']
+# Detect CUDA toolkit path - check common locations (including versioned Fedora packages)
+cuda_paths = ['/usr/local/cuda', '/usr/local/cuda-12.9', '/usr/local/cuda-12.8', '/usr/local/cuda-12']
 cuda_path = ''
 foreach p : cuda_paths
-  if run_command('test', '-d', p / 'include/cuda_runtime.h'.split('/')[0], check: false).returncode() == 0
-    if run_command('test', '-f', p / 'include/cuda_runtime.h', check: false).returncode() == 0
-      cuda_path = p
-      break
-    endif
+  if run_command('test', '-f', p / 'include/cuda_runtime.h', check: false).returncode() == 0
+    cuda_path = p
+    break
   endif
 endforeach
 
