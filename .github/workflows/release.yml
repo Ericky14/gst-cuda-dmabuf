@@ -18,7 +18,7 @@ jobs:
   build-rpm:
     runs-on: ubuntu-latest
     container:
-      image: nvidia/cuda:12.9.0-devel-fedora41
+      image: fedora:41
 
     steps:
       - name: Checkout
@@ -40,6 +40,9 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Add NVIDIA CUDA repository
+          dnf config-manager addrepo --from-repofile=https://developer.download.nvidia.com/compute/cuda/repos/fedora41/x86_64/cuda-fedora41.repo
+          
           dnf install -y \
             rpm-build \
             meson \
@@ -53,7 +56,9 @@ jobs:
             libdrm-devel \
             mesa-libEGL-devel \
             git \
-            make
+            make \
+            cuda-cudart-devel-12-9 \
+            cuda-nvcc-12-9
 
       - name: Build RPMs
         run: |
