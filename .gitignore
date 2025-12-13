@@ -61,6 +61,12 @@ vgcore.*
 perf.data*
 callgrind.out.*
 
+# NVIDIA Nsight profiler
+*.nsys-rep
+*.sqlite
+*.qdrep
+*.qdstrm
+
 # =========================
 # Editor / IDE
 # =========================
@@ -110,5 +116,3 @@ compile_commands.json
 
 .env
 .env.*
-
-report*

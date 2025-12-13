@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * Pooled Buffer Management
  * Pre-allocated buffer pools for zero-copy video paths
  */

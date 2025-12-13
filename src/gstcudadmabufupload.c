@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * GStreamer CUDA DMA-BUF Upload Element
  *
  * Converts CUDA NV12 video to DMA-BUF for zero-copy compositor display.

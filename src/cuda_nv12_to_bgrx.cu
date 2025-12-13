@@ -1,18 +1,17 @@
-/**
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * CUDA kernel for NV12 to BGRx color conversion
- * 
+ *
  * This runs the colorspace conversion on the GPU, keeping the zero-copy
  * pipeline entirely on GPU memory.
- * 
+ *
  * NV12 format:
  *   - Y plane: width x height, 1 byte per pixel
  *   - UV plane: (width/2) x (height/2), 2 bytes per pixel (U,V interleaved)
- * 
+ *
  * BGRx format:
  *   - 4 bytes per pixel (B, G, R, x)
- * 
- * Note: fix_glibc_cuda.h is pre-included via --pre-include to work around
- * glibc 2.41 sinpi/cospi noexcept conflicts.
  */
 
 #include <cuda_runtime.h>

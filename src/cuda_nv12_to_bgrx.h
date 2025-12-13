@@ -1,4 +1,6 @@
-/**
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * CUDA NV12 to BGRx conversion - C header
  */
 

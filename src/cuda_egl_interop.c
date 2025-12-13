@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * CUDA-EGL Interop Layer
  * Handles EGL display/context initialization and CUDA-EGL resource management
  */

@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * Buffer Transform Operations
  * Handles the actual buffer transform logic (NV12 passthrough, NV12→BGRx, BGRx copy)
  */

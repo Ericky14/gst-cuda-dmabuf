@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * DRM Format Utilities
  * Helper functions for parsing DRM formats and modifiers
  */

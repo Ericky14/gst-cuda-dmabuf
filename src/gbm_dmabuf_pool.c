@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ */
+
 #define _GNU_SOURCE
 
 #include "gbm_dmabuf_pool.h"

@@ -170,10 +170,12 @@ sudo dnf install gcc-toolset-14-gcc-c++
 
 # Ubuntu
 sudo apt install g++-14
+```
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) file.
 
-## Author
+## Contributing
 
-Ericky
+Contributions are welcome! Please open issues or pull requests on GitHub.

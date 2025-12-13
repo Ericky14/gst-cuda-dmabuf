@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ */
+
 #include <gst/gst.h>
 #include "gstcudadmabufupload.h"
 

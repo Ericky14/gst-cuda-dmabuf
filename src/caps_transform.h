@@ -1,4 +1,6 @@
-/*
+/* SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 Ericky
+ *
  * Caps Transform Utilities
  * Handles GStreamer caps negotiation and transformation
  */
