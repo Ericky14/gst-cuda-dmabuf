@@ -17,7 +17,8 @@ gst_gbm_dmabuf_pool_start(GstBufferPool *pool)
 {
     GstGbmDmaBufPool *p = (GstGbmDmaBufPool *)pool;
 
-    p->drm_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+    /* Use NVIDIA GPU (renderD129) as primary */
+    p->drm_fd = open("/dev/dri/renderD129", O_RDWR | O_CLOEXEC);
     if (p->drm_fd < 0)
         return FALSE;
 
@@ -66,20 +67,47 @@ gst_gbm_dmabuf_pool_alloc_buffer(GstBufferPool *pool,
 
     struct gbm_bo *bo = NULL;
 
-    /* For CPU-mapped DMABUFs, we must use LINEAR format */
-    /* Tiled formats cannot be CPU-mapped easily */
-    bo = gbm_bo_create(
-        p->gbm,
-        width,
-        height,
-        p->gbm_format,
-        GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
-    
-    if (bo) {
-        p->modifier = DRM_FORMAT_MOD_LINEAR;
+    /* Try to create with the requested modifier first (for zero-copy scanout) */
+    if (p->modifier != DRM_FORMAT_MOD_INVALID && p->modifier != DRM_FORMAT_MOD_LINEAR)
+    {
+        uint64_t modifiers[] = { p->modifier };
+        bo = gbm_bo_create_with_modifiers(
+            p->gbm,
+            width,
+            height,
+            p->gbm_format,
+            modifiers,
+            1);
+        
+        if (bo)
+        {
+            g_print("GBM: Created buffer with modifier 0x%016lx\n", p->modifier);
+        }
+        else
+        {
+            g_print("GBM: Failed to create with modifier 0x%016lx, falling back\n", p->modifier);
+        }
     }
 
-    if (!bo) {
+    /* Fallback to LINEAR if tiled creation failed or not requested */
+    if (!bo)
+    {
+        bo = gbm_bo_create(
+            p->gbm,
+            width,
+            height,
+            p->gbm_format,
+            GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+
+        if (bo)
+        {
+            p->modifier = DRM_FORMAT_MOD_LINEAR;
+            g_print("GBM: Created LINEAR buffer\n");
+        }
+    }
+
+    if (!bo)
+    {
         GST_ERROR_OBJECT(pool, "Failed to create GBM buffer object");
         return GST_FLOW_ERROR;
     }
@@ -93,6 +121,8 @@ gst_gbm_dmabuf_pool_alloc_buffer(GstBufferPool *pool,
 
     guint stride = gbm_bo_get_stride(bo);
     gsize size = (gsize)stride * (gsize)height;
+
+    g_print("GBM ALLOC: %ux%u, gbm_stride=%u, size=%zu\n", width, height, stride, size);
 
     GstMemory *mem = gst_dmabuf_allocator_alloc(p->dmabuf_alloc, fd, size);
 

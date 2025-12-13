@@ -2,8 +2,33 @@ gst_dep = dependency('gstreamer-1.0')
 gst_base_dep = dependency('gstreamer-base-1.0')
 gst_video_dep = dependency('gstreamer-video-1.0')
 gst_allocators_dep = dependency('gstreamer-allocators-1.0')
+gst_cuda_dep = dependency('gstreamer-cuda-1.0')
 gbm_dep = dependency('gbm')
 drm_dep = dependency('libdrm')
+egl_dep = dependency('egl')
+
+# CUDA toolkit path
+cuda_inc = include_directories('/usr/local/cuda/include')
+
+# Find nvcc compiler (specify full path since it may not be in PATH)
+nvcc = find_program('/usr/local/cuda-12.9/bin/nvcc', required: true)
+
+# Compile CUDA kernel to object file
+# Use GCC 14 since CUDA 12.9 doesn't support GCC 15
+# Use our patched crt/math_functions.h to fix glibc 2.41 noexcept conflicts
+cuda_compat_dir = meson.current_source_dir() / 'cuda_compat'
+cuda_kernel = custom_target(
+  'cuda_nv12_to_bgrx',
+  input: 'cuda_nv12_to_bgrx.cu',
+  output: 'cuda_nv12_to_bgrx.o',
+  command: [nvcc, '-c', '@INPUT@', '-o', '@OUTPUT@', 
+            '-Xcompiler', '-fPIC',
+            '-I' + cuda_compat_dir,  # Our patched headers first
+            '-I/usr/local/cuda/include',
+            '--compiler-bindir=/usr/bin/gcc-14',
+            '-Wno-deprecated-gpu-targets'],
+  build_by_default: true
+)
 
 shared_library(
   'gstcudadmabuf',
@@ -12,7 +37,10 @@ shared_library(
     'gstcudadmabufupload.c',
     'plugin.c',
   ],
-  dependencies: [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep, gbm_dep, drm_dep],
+  objects: cuda_kernel,
+  dependencies: [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep, gst_cuda_dep, gbm_dep, drm_dep, egl_dep],
+  include_directories: cuda_inc,
+  link_args: ['-L/usr/local/cuda/lib64', '-lcudart', '-lcuda'],
   install: true,
   install_dir: gst_dep.get_variable('pluginsdir')
 )

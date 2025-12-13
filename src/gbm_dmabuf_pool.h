@@ -19,7 +19,7 @@ struct _GstGbmDmaBufPool
     struct gbm_device *gbm;
     GstAllocator *dmabuf_alloc;
     guint32 gbm_format;
-    guint64 modifier;     /* DRM modifier actually used */
+    guint64 modifier; /* DRM modifier actually used */
 };
 
 GstBufferPool *gst_gbm_dmabuf_pool_new(const GstVideoInfo *info, guint64 modifier);
