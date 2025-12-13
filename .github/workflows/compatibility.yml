@@ -1,0 +1,167 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Ericky
+
+name: Compatibility Check
+
+on:
+  schedule:
+    # Run every Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  cuda-versions:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda-version:
+          - "12.6.0"
+          - "12.5.0"
+          - "12.4.0"
+          - "12.3.0"
+          - "12.2.0"
+        include:
+          - cuda-version: "12.6.0"
+            ubuntu: "ubuntu24.04"
+          - cuda-version: "12.5.0"
+            ubuntu: "ubuntu24.04"
+          - cuda-version: "12.4.0"
+            ubuntu: "ubuntu22.04"
+          - cuda-version: "12.3.0"
+            ubuntu: "ubuntu22.04"
+          - cuda-version: "12.2.0"
+            ubuntu: "ubuntu22.04"
+
+    container:
+      image: nvidia/cuda:${{ matrix.cuda-version }}-devel-${{ matrix.ubuntu }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            meson ninja-build gcc g++ pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libegl1-mesa-dev
+
+      - name: Build with CUDA ${{ matrix.cuda-version }}
+        run: |
+          echo "Building with CUDA ${{ matrix.cuda-version }}"
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Verify plugin loads
+        run: |
+          GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
+
+  gstreamer-versions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+
+    runs-on: ${{ matrix.os }}
+    container:
+      image: nvidia/cuda:12.6.0-devel-${{ matrix.os == 'ubuntu-22.04' && 'ubuntu22.04' || 'ubuntu24.04' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            meson ninja-build gcc g++ pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libegl1-mesa-dev
+
+      - name: Show versions
+        run: |
+          echo "=== Environment ==="
+          cat /etc/os-release | grep -E "^(NAME|VERSION)="
+          echo ""
+          echo "=== CUDA ==="
+          nvcc --version | head -4
+          echo ""
+          echo "=== GStreamer ==="
+          pkg-config --modversion gstreamer-1.0
+          echo ""
+          echo "=== GCC ==="
+          gcc --version | head -1
+
+      - name: Build
+        run: |
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Verify plugin loads
+        run: |
+          GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
+
+  # Test with latest NVIDIA container (bleeding edge)
+  latest-cuda:
+    runs-on: ubuntu-24.04
+    continue-on-error: true  # Don't fail the whole workflow if bleeding edge breaks
+
+    container:
+      image: nvidia/cuda:12-devel-ubuntu24.04  # Floating tag for latest 12.x
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            meson ninja-build gcc g++ pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libegl1-mesa-dev
+
+      - name: Show CUDA version
+        run: nvcc --version
+
+      - name: Build with latest CUDA
+        run: |
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Verify plugin loads
+        run: |
+          GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
+
+  report:
+    needs: [cuda-versions, gstreamer-versions, latest-cuda]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## Compatibility Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| CUDA Versions | ${{ needs.cuda-versions.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GStreamer Versions | ${{ needs.gstreamer-versions.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Latest CUDA | ${{ needs.latest-cuda.result }} |" >> $GITHUB_STEP_SUMMARY

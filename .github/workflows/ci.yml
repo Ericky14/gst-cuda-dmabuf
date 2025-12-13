@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Ericky
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: nvidia/cuda:12.6.0-devel-ubuntu24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            meson ninja-build gcc g++ pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libegl1-mesa-dev
+
+      - name: Build
+        run: |
+          meson setup builddir
+          ninja -C builddir
+
+      - name: Inspect plugin
+        run: |
+          GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check formatting (clang-format)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          # Check if files would be reformatted (dry-run)
+          find src -name '*.c' -o -name '*.h' | xargs clang-format --dry-run --Werror || \
+            echo "::warning::Code formatting issues detected. Run 'make format' to fix."
+
+      - name: Check SPDX headers
+        run: |
+          missing=""
+          for f in src/*.c src/*.h src/*.cu; do
+            if ! head -1 "$f" | grep -q "SPDX-License-Identifier"; then
+              missing="$missing $f"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing SPDX headers in:$missing"
+            exit 1
+          fi
+          echo "All source files have SPDX headers"
