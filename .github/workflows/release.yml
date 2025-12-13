@@ -15,10 +15,10 @@ on:
         type: string
 
 jobs:
-  release:
+  build-rpm:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    container:
+      image: nvidia/cuda:12.9.0-devel-fedora41
 
     steps:
       - name: Checkout
@@ -38,20 +38,81 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Create source tarball
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            rpm-build \
+            meson \
+            ninja-build \
+            gcc \
+            gcc-c++ \
+            gstreamer1-devel \
+            gstreamer1-plugins-base-devel \
+            gstreamer1-plugins-bad-free-devel \
+            mesa-libgbm-devel \
+            libdrm-devel \
+            mesa-libEGL-devel \
+            git \
+            make
+
+      - name: Build RPMs
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          
+          # Build SRPM and binary RPM using Makefile
+          make rpm-clean || true
+          make srpm
+          make rpm
+          
+          # Copy to dist for release
           mkdir -p dist
-          tar --exclude='.git' --exclude='builddir' --exclude='target' --exclude='dist' \
-              -czf dist/gst-cuda-dmabuf-${VERSION}.tar.gz \
-              --transform="s,^,gst-cuda-dmabuf-${VERSION}/," .
+          cp rpmbuild/SOURCES/gst-cuda-dmabuf-${VERSION}.tar.gz dist/
+          cp rpmbuild/SRPMS/*.src.rpm dist/
+          cp rpmbuild/RPMS/*/*.rpm dist/
           
           # Create checksum
           cd dist
           sha256sum gst-cuda-dmabuf-${VERSION}.tar.gz > gst-cuda-dmabuf-${VERSION}.tar.gz.sha256
+          
+          # List built packages
+          echo "Built packages:"
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms
+          path: dist/
+
+  release:
+    needs: build-rpm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION=${TAG#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rpms
+          path: dist/
 
       - name: Generate changelog
-        id: changelog
         run: |
           # Get commits since last tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -63,6 +124,20 @@ jobs:
             echo "" >> RELEASE_NOTES.md
             echo "First release of gst-cuda-dmabuf plugin." >> RELEASE_NOTES.md
           fi
+          echo "" >> RELEASE_NOTES.md
+          echo "## Installation" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "### Fedora (COPR)" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo "sudo dnf copr enable ericky14/gst-cuda-dmabuf" >> RELEASE_NOTES.md
+          echo "sudo dnf install gst-cuda-dmabuf" >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "### Manual RPM Install" >> RELEASE_NOTES.md
+          echo "Download the \`.rpm\` file and install with:" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo "sudo dnf install ./gst-cuda-dmabuf-*.rpm" >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -73,6 +148,4 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           files: |
-            dist/gst-cuda-dmabuf-${{ steps.version.outputs.version }}.tar.gz
-            dist/gst-cuda-dmabuf-${{ steps.version.outputs.version }}.tar.gz.sha256
-            gst-cuda-dmabuf.spec
+            dist/*
