@@ -1,6 +1,21 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: 2025 Ericky
 
+# NVIDIA CUDA packages version varies by Fedora release:
+# - Fedora 41: CUDA 12.9
+# - Fedora 42: CUDA 13.1 (no 12.x available)
+# - Fedora 43+: Not yet available
+# See: https://developer.nvidia.com/cuda-downloads
+%if 0%{?fedora} >= 43
+%{error:NVIDIA CUDA packages are not yet available for Fedora %{fedora}.}
+%endif
+
+%if 0%{?fedora} >= 42
+%global cuda_version 13-1
+%else
+%global cuda_version 12-9
+%endif
+
 Name:           gst-cuda-dmabuf
 Version:        1.0.0
 Release:        1%{?dist}
@@ -22,9 +37,9 @@ BuildRequires:  pkgconfig(gstreamer-allocators-1.0)
 BuildRequires:  pkgconfig(gbm)
 BuildRequires:  pkgconfig(libdrm)
 BuildRequires:  pkgconfig(egl)
-BuildRequires:  cuda-cudart-devel-12-9
-BuildRequires:  cuda-driver-devel-12-9
-BuildRequires:  cuda-nvcc-12-9
+BuildRequires:  cuda-cudart-devel-%{cuda_version}
+BuildRequires:  cuda-driver-devel-%{cuda_version}
+BuildRequires:  cuda-nvcc-%{cuda_version}
 
 Requires:       gstreamer1 >= 1.24
 Requires:       gstreamer1-plugins-base
@@ -42,8 +57,13 @@ and other DMA-BUF consumers. Converts NV12 to BGRX using CUDA kernels.
 
 %build
 # Ensure /usr/local/cuda symlink points to the installed CUDA version
-if [ ! -L /usr/local/cuda ] && [ -d /usr/local/cuda-12.9 ]; then
-    ln -sf /usr/local/cuda-12.9 /usr/local/cuda
+%if 0%{?fedora} >= 42
+CUDA_DIR=/usr/local/cuda-13.1
+%else
+CUDA_DIR=/usr/local/cuda-12.9
+%endif
+if [ ! -L /usr/local/cuda ] && [ -d "$CUDA_DIR" ]; then
+    ln -sf "$CUDA_DIR" /usr/local/cuda
 fi
 %meson
 %meson_build
