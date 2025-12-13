@@ -25,6 +25,40 @@
 #include <cudaGL.h>  /* CUDA-GL interop */
 #include <cudaEGL.h> /* CUDA-EGL interop */
 
+/* Pool size for pre-allocated buffers (eliminates per-frame allocation) */
+#define NV12_POOL_SIZE 4
+#define BGRX_POOL_SIZE 4
+
+/* Pooled NV12 buffer entry with CUDA stream for async operations */
+typedef struct _PooledNV12Buffer
+{
+    struct gbm_bo *bo;
+    int dmabuf_fd;
+    EGLImageKHR egl_image;
+    CUgraphicsResource cuda_resource;
+    CUeglFrame cuda_frame;
+    CUstream cuda_stream; /* Per-buffer CUDA stream for async copy */
+    guint y_stride;
+    guint uv_stride;
+    guint uv_offset;
+    gsize size;
+    gboolean in_use;
+} PooledNV12Buffer;
+
+/* Pooled BGRx buffer entry with CUDA stream */
+typedef struct _PooledBGRxBuffer
+{
+    struct gbm_bo *bo;
+    int dmabuf_fd;
+    EGLImageKHR egl_image;
+    CUgraphicsResource cuda_resource;
+    CUeglFrame cuda_frame;
+    CUstream cuda_stream; /* Per-buffer CUDA stream for async copy */
+    guint stride;
+    gsize size;
+    gboolean in_use;
+} PooledBGRxBuffer;
+
 struct _GstCudaDmabufUpload
 {
     GstBaseTransform parent;
@@ -49,9 +83,346 @@ struct _GstCudaDmabufUpload
     EGLDisplay egl_display;
     EGLContext egl_context;
     gboolean egl_initialized;
+
+    /* Pre-allocated buffer pools for zero-copy paths */
+    PooledNV12Buffer nv12_pool[NV12_POOL_SIZE];
+    guint nv12_pool_index; /* Round-robin index */
+    gboolean nv12_pool_initialized;
+    guint nv12_pool_width; /* Dimensions pool was created for */
+    guint nv12_pool_height;
+
+    PooledBGRxBuffer bgrx_pool[BGRX_POOL_SIZE];
+    guint bgrx_pool_index; /* Round-robin index */
+    gboolean bgrx_pool_initialized;
+    guint bgrx_pool_width; /* Dimensions pool was created for */
+    guint bgrx_pool_height;
 };
 
 G_DEFINE_TYPE(GstCudaDmabufUpload, gst_cuda_dmabuf_upload, GST_TYPE_BASE_TRANSFORM)
+
+/* Forward declarations for pool functions */
+static gboolean init_nv12_pool(GstCudaDmabufUpload *self, guint width, guint height);
+static void cleanup_nv12_pool(GstCudaDmabufUpload *self);
+static gboolean init_bgrx_pool(GstCudaDmabufUpload *self, guint width, guint height);
+static void cleanup_bgrx_pool(GstCudaDmabufUpload *self);
+
+/* Initialize NV12 buffer pool - pre-allocate GBM buffers, EGLImages, and CUDA resources */
+static gboolean
+init_nv12_pool(GstCudaDmabufUpload *self, guint width, guint height)
+{
+    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR =
+        (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+
+    if (!eglCreateImageKHR)
+    {
+        GST_ERROR_OBJECT(self, "EGL_KHR_image not available for pool init");
+        return FALSE;
+    }
+
+    GST_INFO_OBJECT(self, "Initializing NV12 buffer pool: %ux%u, %d buffers",
+                    width, height, NV12_POOL_SIZE);
+
+    for (int i = 0; i < NV12_POOL_SIZE; i++)
+    {
+        PooledNV12Buffer *buf = &self->nv12_pool[i];
+        memset(buf, 0, sizeof(PooledNV12Buffer));
+        buf->dmabuf_fd = -1;
+
+        /* Allocate GBM buffer with negotiated modifier */
+        if (self->negotiated_modifier != DRM_FORMAT_MOD_INVALID &&
+            self->negotiated_modifier != DRM_FORMAT_MOD_LINEAR)
+        {
+            uint64_t mods[] = {self->negotiated_modifier};
+            buf->bo = gbm_bo_create_with_modifiers(self->gbm, width, height,
+                                                   GBM_FORMAT_NV12, mods, 1);
+        }
+        if (!buf->bo)
+        {
+            buf->bo = gbm_bo_create(self->gbm, width, height, GBM_FORMAT_NV12,
+                                    GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+        }
+        if (!buf->bo)
+        {
+            GST_ERROR_OBJECT(self, "Failed to create GBM bo for pool entry %d", i);
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        buf->dmabuf_fd = gbm_bo_get_fd(buf->bo);
+        if (buf->dmabuf_fd < 0)
+        {
+            GST_ERROR_OBJECT(self, "Failed to get dmabuf fd for pool entry %d", i);
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        buf->y_stride = gbm_bo_get_stride_for_plane(buf->bo, 0);
+        buf->uv_stride = gbm_bo_get_stride_for_plane(buf->bo, 1);
+        buf->uv_offset = gbm_bo_get_offset(buf->bo, 1);
+        buf->size = buf->uv_offset + (gsize)buf->uv_stride * (height / 2);
+
+        uint64_t mod = gbm_bo_get_modifier(buf->bo);
+
+        /* Create EGLImage */
+        EGLint attribs[] = {
+            EGL_WIDTH, (EGLint)width,
+            EGL_HEIGHT, (EGLint)height,
+            EGL_LINUX_DRM_FOURCC_EXT, (EGLint)DRM_FORMAT_NV12,
+            EGL_DMA_BUF_PLANE0_FD_EXT, buf->dmabuf_fd,
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)buf->y_stride,
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (EGLint)(mod & 0xffffffff),
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, (EGLint)(mod >> 32),
+            EGL_DMA_BUF_PLANE1_FD_EXT, buf->dmabuf_fd,
+            EGL_DMA_BUF_PLANE1_OFFSET_EXT, (EGLint)buf->uv_offset,
+            EGL_DMA_BUF_PLANE1_PITCH_EXT, (EGLint)buf->uv_stride,
+            EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, (EGLint)(mod & 0xffffffff),
+            EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, (EGLint)(mod >> 32),
+            EGL_NONE};
+
+        buf->egl_image = eglCreateImageKHR(self->egl_display, EGL_NO_CONTEXT,
+                                           EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+        if (buf->egl_image == EGL_NO_IMAGE_KHR)
+        {
+            GST_ERROR_OBJECT(self, "Failed to create EGLImage for pool entry %d: 0x%x",
+                             i, eglGetError());
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        /* Register with CUDA */
+        CUresult cu_res = cuGraphicsEGLRegisterImage(&buf->cuda_resource, buf->egl_image, 0);
+        if (cu_res != CUDA_SUCCESS)
+        {
+            GST_ERROR_OBJECT(self, "Failed to register EGLImage with CUDA for pool entry %d: %d",
+                             i, cu_res);
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        /* Get mapped EGL frame (keep it mapped for the lifetime of the pool) */
+        cu_res = cuGraphicsResourceGetMappedEglFrame(&buf->cuda_frame, buf->cuda_resource, 0, 0);
+        if (cu_res != CUDA_SUCCESS)
+        {
+            GST_ERROR_OBJECT(self, "Failed to map EGL frame for pool entry %d: %d", i, cu_res);
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        /* Create CUDA stream for async operations */
+        cu_res = cuStreamCreate(&buf->cuda_stream, CU_STREAM_NON_BLOCKING);
+        if (cu_res != CUDA_SUCCESS)
+        {
+            GST_ERROR_OBJECT(self, "Failed to create CUDA stream for pool entry %d: %d", i, cu_res);
+            cleanup_nv12_pool(self);
+            return FALSE;
+        }
+
+        buf->in_use = FALSE;
+        GST_DEBUG_OBJECT(self, "NV12 pool entry %d: fd=%d, y_stride=%u, uv_stride=%u, uv_offset=%u, stream=%p",
+                         i, buf->dmabuf_fd, buf->y_stride, buf->uv_stride, buf->uv_offset, (void *)buf->cuda_stream);
+    }
+
+    self->nv12_pool_initialized = TRUE;
+    self->nv12_pool_width = width;
+    self->nv12_pool_height = height;
+    self->nv12_pool_index = 0;
+
+    GST_INFO_OBJECT(self, "NV12 buffer pool initialized with async CUDA streams");
+    return TRUE;
+}
+
+/* Cleanup NV12 buffer pool */
+static void
+cleanup_nv12_pool(GstCudaDmabufUpload *self)
+{
+    PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR =
+        (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+
+    GST_DEBUG_OBJECT(self, "Cleaning up NV12 buffer pool");
+
+    for (int i = 0; i < NV12_POOL_SIZE; i++)
+    {
+        PooledNV12Buffer *buf = &self->nv12_pool[i];
+
+        /* Wait for any pending async operations on this stream */
+        if (buf->cuda_stream)
+        {
+            cuStreamSynchronize(buf->cuda_stream);
+            cuStreamDestroy(buf->cuda_stream);
+            buf->cuda_stream = NULL;
+        }
+        if (buf->cuda_resource)
+        {
+            cuGraphicsUnregisterResource(buf->cuda_resource);
+            buf->cuda_resource = NULL;
+        }
+        if (buf->egl_image && eglDestroyImageKHR && self->egl_display != EGL_NO_DISPLAY)
+        {
+            eglDestroyImageKHR(self->egl_display, buf->egl_image);
+            buf->egl_image = NULL;
+        }
+        if (buf->dmabuf_fd >= 0)
+        {
+            close(buf->dmabuf_fd);
+            buf->dmabuf_fd = -1;
+        }
+        if (buf->bo)
+        {
+            gbm_bo_destroy(buf->bo);
+            buf->bo = NULL;
+        }
+    }
+
+    self->nv12_pool_initialized = FALSE;
+}
+
+/* Initialize BGRx buffer pool for NV12→BGRx path (unused for now, kept for XR24 output) */
+static gboolean G_GNUC_UNUSED
+init_bgrx_pool(GstCudaDmabufUpload *self, guint width, guint height)
+{
+    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR =
+        (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+
+    if (!eglCreateImageKHR)
+    {
+        GST_ERROR_OBJECT(self, "EGL_KHR_image not available for BGRx pool init");
+        return FALSE;
+    }
+
+    GST_INFO_OBJECT(self, "Initializing BGRx buffer pool: %ux%u, %d buffers",
+                    width, height, BGRX_POOL_SIZE);
+
+    for (int i = 0; i < BGRX_POOL_SIZE; i++)
+    {
+        PooledBGRxBuffer *buf = &self->bgrx_pool[i];
+        memset(buf, 0, sizeof(PooledBGRxBuffer));
+        buf->dmabuf_fd = -1;
+
+        /* Allocate GBM buffer with negotiated modifier */
+        if (self->negotiated_modifier != DRM_FORMAT_MOD_INVALID &&
+            self->negotiated_modifier != 0)
+        {
+            uint64_t mods[] = {self->negotiated_modifier};
+            buf->bo = gbm_bo_create_with_modifiers(self->gbm, width, height,
+                                                   GBM_FORMAT_XRGB8888, mods, 1);
+        }
+        if (!buf->bo)
+        {
+            buf->bo = gbm_bo_create(self->gbm, width, height, GBM_FORMAT_XRGB8888,
+                                    GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+        }
+        if (!buf->bo)
+        {
+            GST_ERROR_OBJECT(self, "Failed to create BGRx GBM bo for pool entry %d", i);
+            cleanup_bgrx_pool(self);
+            return FALSE;
+        }
+
+        buf->dmabuf_fd = gbm_bo_get_fd(buf->bo);
+        if (buf->dmabuf_fd < 0)
+        {
+            GST_ERROR_OBJECT(self, "Failed to get BGRx dmabuf fd for pool entry %d", i);
+            cleanup_bgrx_pool(self);
+            return FALSE;
+        }
+
+        buf->stride = gbm_bo_get_stride(buf->bo);
+        buf->size = (gsize)buf->stride * height;
+
+        uint64_t mod = gbm_bo_get_modifier(buf->bo);
+
+        /* Create EGLImage */
+        EGLint attribs[] = {
+            EGL_WIDTH, (EGLint)width,
+            EGL_HEIGHT, (EGLint)height,
+            EGL_LINUX_DRM_FOURCC_EXT, GBM_FORMAT_XRGB8888,
+            EGL_DMA_BUF_PLANE0_FD_EXT, buf->dmabuf_fd,
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)buf->stride,
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (EGLint)(mod & 0xFFFFFFFF),
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, (EGLint)(mod >> 32),
+            EGL_NONE};
+
+        buf->egl_image = eglCreateImageKHR(self->egl_display, EGL_NO_CONTEXT,
+                                           EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
+        if (buf->egl_image == EGL_NO_IMAGE_KHR)
+        {
+            GST_ERROR_OBJECT(self, "Failed to create BGRx EGLImage for pool entry %d: 0x%x",
+                             i, eglGetError());
+            cleanup_bgrx_pool(self);
+            return FALSE;
+        }
+
+        /* Register with CUDA */
+        CUresult cu_res = cuGraphicsEGLRegisterImage(&buf->cuda_resource, buf->egl_image, 0);
+        if (cu_res != CUDA_SUCCESS)
+        {
+            GST_ERROR_OBJECT(self, "Failed to register BGRx EGLImage with CUDA for pool entry %d: %d",
+                             i, cu_res);
+            cleanup_bgrx_pool(self);
+            return FALSE;
+        }
+
+        /* Get mapped EGL frame */
+        cu_res = cuGraphicsResourceGetMappedEglFrame(&buf->cuda_frame, buf->cuda_resource, 0, 0);
+        if (cu_res != CUDA_SUCCESS)
+        {
+            GST_ERROR_OBJECT(self, "Failed to map BGRx EGL frame for pool entry %d: %d", i, cu_res);
+            cleanup_bgrx_pool(self);
+            return FALSE;
+        }
+
+        buf->in_use = FALSE;
+        GST_DEBUG_OBJECT(self, "BGRx pool entry %d: fd=%d, stride=%u", i, buf->dmabuf_fd, buf->stride);
+    }
+
+    self->bgrx_pool_initialized = TRUE;
+    self->bgrx_pool_width = width;
+    self->bgrx_pool_height = height;
+    self->bgrx_pool_index = 0;
+
+    GST_INFO_OBJECT(self, "BGRx buffer pool initialized successfully");
+    return TRUE;
+}
+
+/* Cleanup BGRx buffer pool */
+static void
+cleanup_bgrx_pool(GstCudaDmabufUpload *self)
+{
+    PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR =
+        (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+
+    GST_DEBUG_OBJECT(self, "Cleaning up BGRx buffer pool");
+
+    for (int i = 0; i < BGRX_POOL_SIZE; i++)
+    {
+        PooledBGRxBuffer *buf = &self->bgrx_pool[i];
+
+        if (buf->cuda_resource)
+        {
+            cuGraphicsUnregisterResource(buf->cuda_resource);
+            buf->cuda_resource = NULL;
+        }
+        if (buf->egl_image && eglDestroyImageKHR && self->egl_display != EGL_NO_DISPLAY)
+        {
+            eglDestroyImageKHR(self->egl_display, buf->egl_image);
+            buf->egl_image = NULL;
+        }
+        if (buf->dmabuf_fd >= 0)
+        {
+            close(buf->dmabuf_fd);
+            buf->dmabuf_fd = -1;
+        }
+        if (buf->bo)
+        {
+            gbm_bo_destroy(buf->bo);
+            buf->bo = NULL;
+        }
+    }
+
+    self->bgrx_pool_initialized = FALSE;
+}
 
 /* Parse drm-format string like "XR24:0x0300000000606010" to extract modifier */
 static guint64
@@ -665,7 +1036,8 @@ gst_cuda_dmabuf_upload_decide_allocation(GstBaseTransform *base, GstQuery *query
     return TRUE;
 }
 
-static CUresult
+/* Synchronous copy - fallback when async not available (unused, kept for compatibility) */
+static CUresult G_GNUC_UNUSED
 copy_plane_to_eglframe(const void *src_dev, size_t src_pitch,
                        CUeglFrame *dst, int plane,
                        size_t width_bytes, size_t height_rows)
@@ -697,6 +1069,40 @@ copy_plane_to_eglframe(const void *src_dev, size_t src_pitch,
     return CUDA_ERROR_INVALID_VALUE;
 }
 
+/* Async copy - uses provided CUDA stream for non-blocking operation */
+static CUresult
+copy_plane_to_eglframe_async(const void *src_dev, size_t src_pitch,
+                             CUeglFrame *dst, int plane,
+                             size_t width_bytes, size_t height_rows,
+                             CUstream stream)
+{
+    CUDA_MEMCPY2D c;
+    memset(&c, 0, sizeof(c));
+    c.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+    c.srcDevice = (CUdeviceptr)src_dev;
+    c.srcPitch = src_pitch;
+
+    if (dst->frameType == CU_EGL_FRAME_TYPE_PITCH)
+    {
+        c.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+        c.dstDevice = (CUdeviceptr)dst->frame.pPitch[plane];
+        c.dstPitch = dst->pitch;
+        c.WidthInBytes = width_bytes;
+        c.Height = height_rows;
+        return cuMemcpy2DAsync(&c, stream);
+    }
+    else if (dst->frameType == CU_EGL_FRAME_TYPE_ARRAY)
+    {
+        c.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+        c.dstArray = dst->frame.pArray[plane];
+        c.WidthInBytes = width_bytes;
+        c.Height = height_rows;
+        return cuMemcpy2DAsync(&c, stream);
+    }
+
+    return CUDA_ERROR_INVALID_VALUE;
+}
+
 static GstFlowReturn
 gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
                                              GstBuffer *inbuf,
@@ -705,7 +1111,7 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(base);
 
     /* For CUDA NV12 input with NV12 output: zero-copy passthrough
-     * Copy NV12 planes from CUDA to GBM buffer (no colorspace conversion needed)
+     * Use pre-allocated buffer pool for maximum performance
      */
     if (self->cuda_input && self->nv12_output)
     {
@@ -756,37 +1162,6 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             }
         }
 
-        /* Allocate NV12 GBM BO (try modifier first, else linear) */
-        struct gbm_bo *bo = NULL;
-        if (self->negotiated_modifier != DRM_FORMAT_MOD_INVALID &&
-            self->negotiated_modifier != DRM_FORMAT_MOD_LINEAR)
-        {
-            uint64_t mods[] = {self->negotiated_modifier};
-            bo = gbm_bo_create_with_modifiers(self->gbm, width, height, GBM_FORMAT_NV12, mods, 1);
-        }
-        if (!bo)
-        {
-            bo = gbm_bo_create(self->gbm, width, height, GBM_FORMAT_NV12,
-                               GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
-        }
-        if (!bo)
-        {
-            GST_ERROR_OBJECT(self, "Failed to allocate NV12 GBM BO");
-            return GST_FLOW_ERROR;
-        }
-
-        int dmabuf_fd = gbm_bo_get_fd(bo);
-        if (dmabuf_fd < 0)
-        {
-            GST_ERROR_OBJECT(self, "gbm_bo_get_fd failed");
-            gbm_bo_destroy(bo);
-            return GST_FLOW_ERROR;
-        }
-
-        guint y_stride_out = gbm_bo_get_stride_for_plane(bo, 0);
-        guint uv_stride_out = gbm_bo_get_stride_for_plane(bo, 1);
-        guint uv_offset_out = gbm_bo_get_offset(bo, 1);
-
         /* Init EGL once */
         if (!self->egl_initialized)
         {
@@ -801,8 +1176,6 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             if (self->egl_display == EGL_NO_DISPLAY)
             {
                 GST_ERROR_OBJECT(self, "eglGetDisplay failed: 0x%x", eglGetError());
-                close(dmabuf_fd);
-                gbm_bo_destroy(bo);
                 return GST_FLOW_ERROR;
             }
 
@@ -811,8 +1184,6 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             {
                 GST_ERROR_OBJECT(self, "eglInitialize failed: 0x%x", eglGetError());
                 self->egl_display = EGL_NO_DISPLAY;
-                close(dmabuf_fd);
-                gbm_bo_destroy(bo);
                 return GST_FLOW_ERROR;
             }
 
@@ -822,78 +1193,41 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             if (cu_res != CUDA_SUCCESS)
             {
                 GST_ERROR_OBJECT(self, "cuInit failed: %d", cu_res);
-                close(dmabuf_fd);
-                gbm_bo_destroy(bo);
                 return GST_FLOW_ERROR;
             }
         }
 
-        PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR =
-            (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-        PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR =
-            (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-
-        if (!eglCreateImageKHR || !eglDestroyImageKHR)
+        /* Initialize NV12 buffer pool if needed (or if dimensions changed) */
+        if (!self->nv12_pool_initialized ||
+            self->nv12_pool_width != width ||
+            self->nv12_pool_height != height)
         {
-            GST_ERROR_OBJECT(self, "EGL_KHR_image missing");
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
-            return GST_FLOW_ERROR;
+            if (self->nv12_pool_initialized)
+            {
+                cleanup_nv12_pool(self);
+            }
+            if (!init_nv12_pool(self, width, height))
+            {
+                GST_ERROR_OBJECT(self, "Failed to initialize NV12 buffer pool");
+                return GST_FLOW_ERROR;
+            }
         }
 
-        uint64_t mod = gbm_bo_get_modifier(bo);
+        /* Get next pooled buffer (round-robin) */
+        PooledNV12Buffer *pool_buf = &self->nv12_pool[self->nv12_pool_index];
+        self->nv12_pool_index = (self->nv12_pool_index + 1) % NV12_POOL_SIZE;
 
-        /* IMPORTANT: use DRM_FORMAT_NV12 for EGL_LINUX_DRM_FOURCC_EXT */
-        EGLint attribs[] = {
-            EGL_WIDTH, (EGLint)width,
-            EGL_HEIGHT, (EGLint)height,
-            EGL_LINUX_DRM_FOURCC_EXT, (EGLint)DRM_FORMAT_NV12,
+        GST_LOG_OBJECT(self, "Using pooled NV12 buffer %d (fd=%d, stream=%p)",
+                       (self->nv12_pool_index + NV12_POOL_SIZE - 1) % NV12_POOL_SIZE,
+                       pool_buf->dmabuf_fd, (void *)pool_buf->cuda_stream);
 
-            EGL_DMA_BUF_PLANE0_FD_EXT, dmabuf_fd,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)y_stride_out,
-            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (EGLint)(mod & 0xffffffff),
-            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, (EGLint)(mod >> 32),
-
-            EGL_DMA_BUF_PLANE1_FD_EXT, dmabuf_fd,
-            EGL_DMA_BUF_PLANE1_OFFSET_EXT, (EGLint)uv_offset_out,
-            EGL_DMA_BUF_PLANE1_PITCH_EXT, (EGLint)uv_stride_out,
-            EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, (EGLint)(mod & 0xffffffff),
-            EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, (EGLint)(mod >> 32),
-
-            EGL_NONE};
-
-        EGLImageKHR egl_image = eglCreateImageKHR(self->egl_display, EGL_NO_CONTEXT,
-                                                  EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
-        if (egl_image == EGL_NO_IMAGE_KHR)
-        {
-            GST_ERROR_OBJECT(self, "eglCreateImageKHR(NV12) failed: 0x%x", eglGetError());
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
-            return GST_FLOW_ERROR;
-        }
-
-        CUgraphicsResource res = NULL;
-        CUresult cu_res = cuGraphicsEGLRegisterImage(&res, egl_image, 0);
+        /* Wait for any previous async operation on this buffer to complete
+         * This ensures the buffer is ready for reuse (round-robin means we're
+         * NV12_POOL_SIZE frames behind, giving time for async completion) */
+        CUresult cu_res = cuStreamSynchronize(pool_buf->cuda_stream);
         if (cu_res != CUDA_SUCCESS)
         {
-            GST_ERROR_OBJECT(self, "cuGraphicsEGLRegisterImage failed: %d", cu_res);
-            eglDestroyImageKHR(self->egl_display, egl_image);
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
-            return GST_FLOW_ERROR;
-        }
-
-        CUeglFrame out_frame;
-        cu_res = cuGraphicsResourceGetMappedEglFrame(&out_frame, res, 0, 0);
-        if (cu_res != CUDA_SUCCESS)
-        {
-            GST_ERROR_OBJECT(self, "cuGraphicsResourceGetMappedEglFrame failed: %d", cu_res);
-            cuGraphicsUnregisterResource(res);
-            eglDestroyImageKHR(self->egl_display, egl_image);
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
-            return GST_FLOW_ERROR;
+            GST_WARNING_OBJECT(self, "cuStreamSynchronize failed: %d", cu_res);
         }
 
         /* Map input CUDA buffer to get device pointer */
@@ -901,10 +1235,6 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
         if (!gst_buffer_map(inbuf, &in_map, GST_MAP_READ | GST_MAP_CUDA))
         {
             GST_ERROR_OBJECT(self, "gst_buffer_map(CUDA) failed");
-            cuGraphicsUnregisterResource(res);
-            eglDestroyImageKHR(self->egl_display, egl_image);
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
             return GST_FLOW_ERROR;
         }
 
@@ -912,63 +1242,62 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
         const void *in_y = (const void *)in_base;
         const void *in_uv = (const void *)(in_base + uv_offset_in);
 
-        /* Copy Y plane */
-        cu_res = copy_plane_to_eglframe(in_y, (size_t)y_stride_in,
-                                        &out_frame, 0,
-                                        (size_t)width, (size_t)height);
+        /* Copy Y plane asynchronously using buffer's CUDA stream */
+        cu_res = copy_plane_to_eglframe_async(in_y, (size_t)y_stride_in,
+                                              &pool_buf->cuda_frame, 0,
+                                              (size_t)width, (size_t)height,
+                                              pool_buf->cuda_stream);
         if (cu_res != CUDA_SUCCESS)
         {
-            GST_ERROR_OBJECT(self, "copy Y failed: %d", cu_res);
+            GST_ERROR_OBJECT(self, "async copy Y failed: %d", cu_res);
             gst_buffer_unmap(inbuf, &in_map);
-            cuGraphicsUnregisterResource(res);
-            eglDestroyImageKHR(self->egl_display, egl_image);
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
             return GST_FLOW_ERROR;
         }
 
-        /* Copy interleaved UV plane (height/2 rows, width bytes per row) */
-        cu_res = copy_plane_to_eglframe(in_uv, (size_t)uv_stride_in,
-                                        &out_frame, 1,
-                                        (size_t)width, (size_t)(height / 2));
+        /* Copy interleaved UV plane asynchronously (height/2 rows, width bytes per row) */
+        cu_res = copy_plane_to_eglframe_async(in_uv, (size_t)uv_stride_in,
+                                              &pool_buf->cuda_frame, 1,
+                                              (size_t)width, (size_t)(height / 2),
+                                              pool_buf->cuda_stream);
         if (cu_res != CUDA_SUCCESS)
         {
-            GST_ERROR_OBJECT(self, "copy UV failed: %d", cu_res);
+            GST_ERROR_OBJECT(self, "async copy UV failed: %d", cu_res);
             gst_buffer_unmap(inbuf, &in_map);
-            cuGraphicsUnregisterResource(res);
-            eglDestroyImageKHR(self->egl_display, egl_image);
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
             return GST_FLOW_ERROR;
         }
 
         gst_buffer_unmap(inbuf, &in_map);
 
-        cuCtxSynchronize();
-        cuGraphicsUnregisterResource(res);
-        eglDestroyImageKHR(self->egl_display, egl_image);
+        /* Sync on this stream before handing buffer to compositor
+         * (compositor needs the copy to be complete) */
+        cuStreamSynchronize(pool_buf->cuda_stream);
 
-        /* Wrap DMABUF into GstBuffer */
+        /* Wrap DMABUF into GstBuffer - dup the fd since pool owns the original */
         if (!self->dmabuf_allocator)
             self->dmabuf_allocator = gst_dmabuf_allocator_new();
 
-        gsize size = uv_offset_out + (gsize)uv_stride_out * (gsize)(height / 2);
+        int fd_dup = dup(pool_buf->dmabuf_fd);
+        if (fd_dup < 0)
+        {
+            GST_ERROR_OBJECT(self, "Failed to dup dmabuf fd");
+            return GST_FLOW_ERROR;
+        }
 
-        GstMemory *dmabuf_mem = gst_dmabuf_allocator_alloc(self->dmabuf_allocator, dmabuf_fd, size);
+        GstMemory *dmabuf_mem = gst_dmabuf_allocator_alloc(self->dmabuf_allocator,
+                                                           fd_dup, pool_buf->size);
         if (!dmabuf_mem)
         {
-            close(dmabuf_fd);
-            gbm_bo_destroy(bo);
+            close(fd_dup);
             return GST_FLOW_ERROR;
         }
 
         *outbuf = gst_buffer_new();
         gst_buffer_append_memory(*outbuf, dmabuf_mem);
 
-        /* IMPORTANT: since your caps say format=DMA_DRM, use DMA_DRM meta format */
+        /* Add video meta for DMA_DRM format */
         {
-            gsize offsets[4] = {0, uv_offset_out, 0, 0};
-            gint strides[4] = {(gint)y_stride_out, (gint)uv_stride_out, 0, 0};
+            gsize offsets[4] = {0, pool_buf->uv_offset, 0, 0};
+            gint strides[4] = {(gint)pool_buf->y_stride, (gint)pool_buf->uv_stride, 0, 0};
 
             gst_buffer_add_video_meta_full(*outbuf,
                                            GST_VIDEO_FRAME_FLAG_NONE,
@@ -976,10 +1305,6 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
                                            width, height,
                                            2, offsets, strides);
         }
-
-        gst_mini_object_set_qdata(GST_MINI_OBJECT(*outbuf),
-                                  g_quark_from_static_string("gbm-bo"),
-                                  bo, (GDestroyNotify)gbm_bo_destroy);
 
         GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);
         GST_BUFFER_DTS(*outbuf) = GST_BUFFER_DTS(inbuf);
@@ -1546,6 +1871,17 @@ gst_cuda_dmabuf_upload_finalize(GObject *object)
 {
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
 
+    /* Clean up buffer pools first (while EGL/GBM still valid) */
+    if (self->nv12_pool_initialized)
+    {
+        cleanup_nv12_pool(self);
+    }
+
+    if (self->bgrx_pool_initialized)
+    {
+        cleanup_bgrx_pool(self);
+    }
+
     if (self->pool)
     {
         gst_buffer_pool_set_active(self->pool, FALSE);
@@ -1649,4 +1985,17 @@ gst_cuda_dmabuf_upload_init(GstCudaDmabufUpload *self)
     self->gbm = NULL;
     self->egl_display = EGL_NO_DISPLAY;
     self->egl_initialized = FALSE;
+
+    /* Initialize buffer pool state */
+    memset(self->nv12_pool, 0, sizeof(self->nv12_pool));
+    self->nv12_pool_index = 0;
+    self->nv12_pool_initialized = FALSE;
+    self->nv12_pool_width = 0;
+    self->nv12_pool_height = 0;
+
+    memset(self->bgrx_pool, 0, sizeof(self->bgrx_pool));
+    self->bgrx_pool_index = 0;
+    self->bgrx_pool_initialized = FALSE;
+    self->bgrx_pool_width = 0;
+    self->bgrx_pool_height = 0;
 }
