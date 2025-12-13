@@ -14,9 +14,11 @@ BuildRequires:  meson >= 1.1.0
 BuildRequires:  ninja-build
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
+BuildRequires:  gstreamer1-plugins-bad-free-devel
 BuildRequires:  pkgconfig(gstreamer-1.0) >= 1.24
 BuildRequires:  pkgconfig(gstreamer-base-1.0)
 BuildRequires:  pkgconfig(gstreamer-video-1.0)
+BuildRequires:  pkgconfig(gstreamer-allocators-1.0)
 BuildRequires:  pkgconfig(gbm)
 BuildRequires:  pkgconfig(libdrm)
 BuildRequires:  pkgconfig(egl)
