@@ -58,7 +58,7 @@ jobs:
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
-          pip3 install meson
+          pip3 install --break-system-packages meson
 
       - name: Build with CUDA ${{ matrix.cuda-version }}
         run: |
@@ -99,7 +99,7 @@ jobs:
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
-          pip3 install meson
+          pip3 install --break-system-packages meson
 
       - name: Show versions
         run: |
@@ -149,7 +149,7 @@ jobs:
             libgbm-dev \
             libdrm-dev \
             libegl1-mesa-dev
-          pip3 install meson
+          pip3 install --break-system-packages meson
 
       - name: Show CUDA version
         run: nvcc --version
