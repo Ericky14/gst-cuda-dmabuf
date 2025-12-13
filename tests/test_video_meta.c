@@ -17,18 +17,23 @@
 static int tests_passed = 0;
 static int tests_failed = 0;
 
-#define TEST_ASSERT(cond, msg) do { \
-    if (!(cond)) { \
-        fprintf(stderr, "FAIL: %s\n", msg); \
-        tests_failed++; \
-        return; \
-    } \
-} while(0)
+#define TEST_ASSERT(cond, msg)                  \
+    do                                          \
+    {                                           \
+        if (!(cond))                            \
+        {                                       \
+            fprintf(stderr, "FAIL: %s\n", msg); \
+            tests_failed++;                     \
+            return;                             \
+        }                                       \
+    } while (0)
 
-#define TEST_PASS(name) do { \
-    printf("PASS: %s\n", name); \
-    tests_passed++; \
-} while(0)
+#define TEST_PASS(name)             \
+    do                              \
+    {                               \
+        printf("PASS: %s\n", name); \
+        tests_passed++;             \
+    } while (0)
 
 /**
  * Test that GstVideoMeta with NV12 format has correct properties
@@ -46,7 +51,7 @@ test_nv12_video_meta_format(void)
     GstVideoMeta *vmeta = gst_buffer_add_video_meta_full(
         buf,
         GST_VIDEO_FRAME_FLAG_NONE,
-        GST_VIDEO_FORMAT_NV12,  /* Must be actual format, NOT DMA_DRM */
+        GST_VIDEO_FORMAT_NV12, /* Must be actual format, NOT DMA_DRM */
         TEST_WIDTH,
         TEST_HEIGHT,
         2,
@@ -91,7 +96,7 @@ test_bgrx_video_meta_format(void)
     GstVideoMeta *vmeta = gst_buffer_add_video_meta_full(
         buf,
         GST_VIDEO_FRAME_FLAG_NONE,
-        GST_VIDEO_FORMAT_BGRx,  /* Must be actual format, NOT DMA_DRM */
+        GST_VIDEO_FORMAT_BGRx, /* Must be actual format, NOT DMA_DRM */
         TEST_WIDTH,
         TEST_HEIGHT,
         1,
@@ -144,7 +149,7 @@ static void
 test_video_meta_custom_stride(void)
 {
     /* GPU buffers often have padded strides for alignment */
-    const gint padded_stride = 2048;  /* Aligned to 256 bytes */
+    const gint padded_stride = 2048; /* Aligned to 256 bytes */
 
     GstBuffer *buf = gst_buffer_new_allocate(NULL, padded_stride * TEST_HEIGHT * 4, NULL);
     TEST_ASSERT(buf != NULL, "Failed to allocate buffer");
@@ -172,8 +177,7 @@ test_video_meta_custom_stride(void)
     TEST_PASS("test_video_meta_custom_stride");
 }
 
-int
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
     gst_init(&argc, &argv);
 
