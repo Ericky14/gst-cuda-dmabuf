@@ -17,14 +17,12 @@
 #include <gst/video/video.h>
 #include <gst/cuda/gstcuda.h>
 #include <gst/allocators/allocators.h>
-#include <wayland-client.h>
 #include <drm/drm_fourcc.h>
 #include <gbm.h>
 #include <string.h>
 
-/* Pool sizes for pre-allocated buffers */
+/* Pool size for pre-allocated NV12 buffers */
 #define NV12_POOL_SIZE 4
-#define BGRX_POOL_SIZE 4
 
 GST_DEBUG_CATEGORY(gst_cuda_dmabuf_upload_debug);
 #define GST_CAT_DEFAULT gst_cuda_dmabuf_upload_debug
@@ -38,20 +36,14 @@ struct _GstCudaDmabufUpload
     GstVideoInfo info;
     GstVideoInfo cuda_info;
 
-    /* Wayland display (if available) */
-    struct wl_display *wl_display;
-
     /* Negotiated output format */
     guint64 negotiated_modifier;
-    guint32 negotiated_fourcc;
     gboolean nv12_output;
 
     /* GStreamer pools */
     GstBufferPool *pool;
     GstBufferPool *cuda_pool;
-    GstBufferPool *cuda_bgrx_pool;
     GstCudaContext *cuda_ctx;
-    GstAllocator *dmabuf_allocator;
 
     /* Flags */
     gboolean cuda_input;
@@ -59,9 +51,8 @@ struct _GstCudaDmabufUpload
     /* CUDA-EGL interop context */
     CudaEglContext egl_ctx;
 
-    /* Pre-allocated buffer pools */
+    /* Pre-allocated NV12 buffer pool */
     PooledBufferPool nv12_pool;
-    PooledBufferPool bgrx_pool;
 
     /* Buffer transform context */
     BufferTransformContext btx;
@@ -153,7 +144,6 @@ gst_cuda_dmabuf_upload_set_caps(GstBaseTransform *base, GstCaps *incaps, GstCaps
     {
         self->negotiated_modifier = drm_format_parse_modifier(drm_format);
         self->nv12_output = drm_format_is_nv12(drm_format);
-        self->negotiated_fourcc = drm_format_get_fourcc(drm_format);
 
         GST_INFO_OBJECT(self, "Negotiated: %s (modifier: 0x%016lx, nv12=%d)",
                         drm_format, self->negotiated_modifier, self->nv12_output);
@@ -161,7 +151,6 @@ gst_cuda_dmabuf_upload_set_caps(GstBaseTransform *base, GstCaps *incaps, GstCaps
     else
     {
         self->negotiated_modifier = DRM_FORMAT_MOD_INVALID;
-        self->negotiated_fourcc = 0;
         self->nv12_output = FALSE;
     }
 
@@ -435,30 +424,13 @@ gst_cuda_dmabuf_upload_transform(GstBaseTransform *base, GstBuffer *inbuf, GstBu
  * Lifecycle
  * ============================================================================ */
 
-static gboolean
-gst_cuda_dmabuf_upload_start(GstBaseTransform *trans)
-{
-    GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(trans);
-
-    GstContext *ctx = gst_element_get_context(GST_ELEMENT(trans), "gst.wayland.display");
-    if (ctx)
-    {
-        const GstStructure *s = gst_context_get_structure(ctx);
-        gst_structure_get(s, "display", G_TYPE_POINTER, &self->wl_display, NULL);
-        gst_context_unref(ctx);
-    }
-
-    return TRUE;
-}
-
 static void
 gst_cuda_dmabuf_upload_finalize(GObject *object)
 {
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
 
-    /* Clean up buffer pools */
+    /* Clean up buffer pool */
     pooled_buffer_pool_cleanup(&self->nv12_pool, &self->egl_ctx);
-    pooled_buffer_pool_cleanup(&self->bgrx_pool, &self->egl_ctx);
 
     if (self->pool)
     {
@@ -470,15 +442,8 @@ gst_cuda_dmabuf_upload_finalize(GObject *object)
         gst_buffer_pool_set_active(self->cuda_pool, FALSE);
         gst_object_unref(self->cuda_pool);
     }
-    if (self->cuda_bgrx_pool)
-    {
-        gst_buffer_pool_set_active(self->cuda_bgrx_pool, FALSE);
-        gst_object_unref(self->cuda_bgrx_pool);
-    }
     if (self->cuda_ctx)
         gst_object_unref(self->cuda_ctx);
-    if (self->dmabuf_allocator)
-        gst_object_unref(self->dmabuf_allocator);
     if (self->btx.dmabuf_allocator)
         gst_object_unref(self->btx.dmabuf_allocator);
 
@@ -508,7 +473,6 @@ gst_cuda_dmabuf_upload_class_init(GstCudaDmabufUploadClass *klass)
                                           "Zero-copy CUDA to DMA-BUF for Wayland compositor display",
                                           "Ericky");
 
-    base_class->start = GST_DEBUG_FUNCPTR(gst_cuda_dmabuf_upload_start);
     base_class->set_caps = GST_DEBUG_FUNCPTR(gst_cuda_dmabuf_upload_set_caps);
     base_class->propose_allocation = GST_DEBUG_FUNCPTR(gst_cuda_dmabuf_upload_propose_allocation);
     base_class->decide_allocation = GST_DEBUG_FUNCPTR(gst_cuda_dmabuf_upload_decide_allocation);
@@ -526,6 +490,5 @@ gst_cuda_dmabuf_upload_init(GstCudaDmabufUpload *self)
     self->negotiated_modifier = DRM_FORMAT_MOD_INVALID;
     memset(&self->egl_ctx, 0, sizeof(CudaEglContext));
     memset(&self->nv12_pool, 0, sizeof(PooledBufferPool));
-    memset(&self->bgrx_pool, 0, sizeof(PooledBufferPool));
     memset(&self->btx, 0, sizeof(BufferTransformContext));
 }

@@ -181,14 +181,3 @@ caps_transform_src_to_sink(GstCaps *caps)
 
     return outcaps;
 }
-
-GstCaps *
-caps_transform_get_sink_template(void)
-{
-    return gst_caps_new_simple(
-        "video/x-raw(memory:CUDAMemory)",
-        "format", G_TYPE_STRING, "NV12",
-        "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
-        "height", GST_TYPE_INT_RANGE, 1, G_MAXINT,
-        NULL);
-}

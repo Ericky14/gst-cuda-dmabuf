@@ -44,13 +44,6 @@ GstCaps *caps_transform_sink_to_src(GstCaps *caps);
  */
 GstCaps *caps_transform_src_to_sink(GstCaps *caps);
 
-/**
- * Get the default sink pad template caps.
- *
- * @return Static caps for sink pad (do not free)
- */
-GstCaps *caps_transform_get_sink_template(void);
-
 G_END_DECLS
 
 #endif /* __CAPS_TRANSFORM_H__ */
