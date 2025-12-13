@@ -58,6 +58,7 @@ jobs:
             git \
             make \
             cuda-cudart-devel-12-9 \
+            cuda-driver-devel-12-9 \
             cuda-nvcc-12-9
 
       - name: Build RPMs
