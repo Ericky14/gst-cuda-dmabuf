@@ -16,7 +16,7 @@ A GStreamer element that converts CUDA NV12 video frames to DMA-BUF for zero-cop
 - GStreamer 1.20+ with CUDA support (`gstreamer-cuda-1.0`)
 - NVIDIA driver with DMA-BUF support (515+)
 - CUDA Toolkit 12.x
-- GCC 14 (required by nvcc for CUDA compilation)
+- GCC/G++ (GCC 14 required only if system has GCC 15)
 - Mesa/GBM for DMA-BUF allocation
 - EGL for CUDA-EGL interop
 
@@ -25,7 +25,7 @@ A GStreamer element that converts CUDA NV12 video frames to DMA-BUF for zero-cop
 ```bash
 sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel \
     gstreamer1-plugins-bad-free-devel mesa-libgbm-devel libdrm-devel \
-    mesa-libEGL-devel meson ninja-build gcc-c++ gcc-toolset-14-gcc-c++ \
+    mesa-libEGL-devel meson ninja-build gcc-c++ \
     gstreamer1-plugin-nvidia  # For nvh264dec
 ```
 
@@ -34,7 +34,7 @@ sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel \
 ```bash
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     libgstreamer-plugins-bad1.0-dev libgbm-dev libdrm-dev \
-    libegl1-mesa-dev meson ninja-build g++-14 \
+    libegl1-mesa-dev meson ninja-build g++ \
     gstreamer1.0-plugins-bad  # For nvh264dec
 ```
 
@@ -160,9 +160,11 @@ NVIDIA drivers have known false positives. Use the included suppression file:
 make check-leaks  # Uses nvidia.supp automatically
 ```
 
-### CUDA Compilation Requires GCC 14
+### GCC 15 Compatibility
 
-CUDA 12.9 doesn't support GCC 15's `type_traits`. Ensure GCC 14 is installed:
+If your system has GCC 15, CUDA 12.9 requires GCC 14 instead (due to `type_traits` incompatibility).
+
+Install GCC 14:
 
 ```bash
 # Fedora
@@ -171,6 +173,8 @@ sudo dnf install gcc-toolset-14-gcc-c++
 # Ubuntu
 sudo apt install g++-14
 ```
+
+Then add `--compiler-bindir=/usr/bin/gcc-14` to the nvcc command in [src/meson.build](src/meson.build#L23).
 
 ## License
 

@@ -63,7 +63,6 @@ jobs:
           GST_PLUGIN_PATH=$PWD/builddir/src gst-inspect-1.0 cudadmabufupload
 
   gstreamer-versions:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +70,7 @@ jobs:
           - ubuntu-22.04
           - ubuntu-24.04
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     container:
       image: nvidia/cuda:12.6.0-devel-${{ matrix.os == 'ubuntu-22.04' && 'ubuntu22.04' || 'ubuntu24.04' }}
 

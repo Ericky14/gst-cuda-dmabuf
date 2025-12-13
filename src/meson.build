@@ -10,8 +10,8 @@ egl_dep = dependency('egl')
 # CUDA toolkit path
 cuda_inc = include_directories('/usr/local/cuda/include')
 
-# Find nvcc compiler (specify full path since it may not be in PATH)
-nvcc = find_program('/usr/local/cuda-12.9/bin/nvcc', required: true)
+# Find nvcc compiler (try common paths)
+nvcc = find_program('nvcc', '/usr/local/cuda/bin/nvcc', '/usr/local/cuda-12.9/bin/nvcc', required: true)
 
 # Compile CUDA kernel to object file
 # Note: CUDA 12.9 requires GCC 14 (doesn't support GCC 15 type_traits yet)
@@ -23,10 +23,10 @@ cuda_kernel = custom_target(
   command: [nvcc, '-c', '@INPUT@', '-o', '@OUTPUT@', 
             '-Xcompiler', '-fPIC',
             '-I/usr/local/cuda/include',
-            '--compiler-bindir=/usr/bin/gcc-14',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT=0',
             '-D__GLIBC_USE_IEC_60559_FUNCS_EXT_C23=0',
             '-Wno-deprecated-gpu-targets'],
+  # Note: Add --compiler-bindir=/usr/bin/gcc-14 locally if GCC 15 installed
   build_by_default: true
 )
 
