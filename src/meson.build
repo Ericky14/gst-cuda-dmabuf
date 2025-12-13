@@ -75,8 +75,8 @@ shared_library(
   objects: cuda_kernel,
   dependencies: [gst_dep, gst_base_dep, gst_video_dep, gst_allocators_dep, gst_cuda_dep, gbm_dep, drm_dep, egl_dep],
   include_directories: cuda_inc,
-  # Link against cudart and cuda (driver API stub for build, resolved at runtime)
-  link_args: ['-L' + cuda_lib_path, '-L' + cuda_stubs_path, '-lcudart', '-lcuda'],
+  # Link against cudart, cuda (driver API stub), and stdc++ (for CUDA C++ runtime symbols)
+  link_args: ['-L' + cuda_lib_path, '-L' + cuda_stubs_path, '-lcudart', '-lcuda', '-lstdc++'],
   install: true,
   install_dir: gst_dep.get_variable('pluginsdir')
 )
