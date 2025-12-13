@@ -20,8 +20,8 @@ BuildRequires:  pkgconfig(gstreamer-video-1.0)
 BuildRequires:  pkgconfig(gbm)
 BuildRequires:  pkgconfig(libdrm)
 BuildRequires:  pkgconfig(egl)
-BuildRequires:  cuda-cudart-devel
-BuildRequires:  cuda-nvcc
+BuildRequires:  cuda-cudart-devel-12-9
+BuildRequires:  cuda-nvcc-12-9
 
 Requires:       gstreamer1 >= 1.24
 Requires:       gstreamer1-plugins-base
