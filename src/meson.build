@@ -8,7 +8,7 @@ drm_dep = dependency('libdrm')
 egl_dep = dependency('egl')
 
 # Detect CUDA toolkit path - check common locations (including versioned Fedora packages)
-cuda_paths = ['/usr/local/cuda', '/usr/local/cuda-12.9', '/usr/local/cuda-12.8', '/usr/local/cuda-12']
+cuda_paths = ['/usr/local/cuda', '/usr/local/cuda-13.1', '/usr/local/cuda-13.0', '/usr/local/cuda-13', '/usr/local/cuda-12.9', '/usr/local/cuda-12.8', '/usr/local/cuda-12']
 cuda_path = ''
 foreach p : cuda_paths
   if run_command('test', '-f', p / 'include/cuda_runtime.h', check: false).returncode() == 0
@@ -31,7 +31,7 @@ cuda_stubs_path = cuda_path / 'lib64/stubs'
 # Find nvcc compiler (try common paths)
 nvcc = find_program('nvcc', cuda_path / 'bin/nvcc', '/usr/local/cuda/bin/nvcc', required: true)
 
-# Check if we need GCC 14 for nvcc (CUDA 12.x doesn't support GCC 15)
+# Check if we need GCC 14 for nvcc (CUDA 12.x doesn't support GCC 15, but 13.x does)
 cc = meson.get_compiler('c')
 gcc_version = cc.version().split('.')[0].to_int()
 nvcc_extra_args = []
@@ -39,9 +39,9 @@ if gcc_version >= 15
   gcc14 = find_program('gcc-14', required: false)
   if gcc14.found()
     nvcc_extra_args = ['--compiler-bindir=/usr/bin/gcc-14']
-    message('GCC @0@ detected, using GCC 14 for nvcc'.format(cc.version()))
+    message('GCC @0@ detected, using GCC 14 for nvcc (required for CUDA 12.x)'.format(cc.version()))
   else
-    warning('GCC 15+ detected but gcc-14 not found. CUDA compilation may fail.')
+    warning('GCC 15+ detected but gcc-14 not found. CUDA 12.x compilation may fail (CUDA 13.x works with GCC 15).')
   endif
 endif
 
