@@ -37,6 +37,7 @@ BuildRequires:  pkgconfig(gstreamer-allocators-1.0)
 BuildRequires:  pkgconfig(gbm)
 BuildRequires:  pkgconfig(libdrm)
 BuildRequires:  pkgconfig(egl)
+BuildRequires:  libatomic
 BuildRequires:  cuda-cudart-devel-%{cuda_version}
 BuildRequires:  cuda-driver-devel-%{cuda_version}
 BuildRequires:  cuda-nvcc-%{cuda_version}
