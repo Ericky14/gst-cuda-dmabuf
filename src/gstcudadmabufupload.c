@@ -23,8 +23,8 @@
 #include <gbm.h>
 #include <string.h>
 
-/* Pool size for pre-allocated NV12 buffers */
-#define NV12_POOL_SIZE 4
+/* Pool size for pre-allocated NV12 buffers - larger for smoother playback */
+#define NV12_POOL_SIZE 8
 
 GST_DEBUG_CATEGORY(gst_cuda_dmabuf_upload_debug);
 #define GST_CAT_DEFAULT gst_cuda_dmabuf_upload_debug
@@ -271,7 +271,7 @@ gst_cuda_dmabuf_upload_propose_allocation(GstBaseTransform *base,
     gst_buffer_pool_config_set_cuda_alloc_method(config, GST_CUDA_MEMORY_ALLOC_MMAP);
 
     guint size = GST_VIDEO_INFO_SIZE(&info);
-    gst_buffer_pool_config_set_params(config, caps, size, 4, 0);
+    gst_buffer_pool_config_set_params(config, caps, size, 8, 0);
     gst_buffer_pool_config_add_option(config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
     if (!gst_buffer_pool_set_config(self->cuda_pool, config))
@@ -282,7 +282,7 @@ gst_cuda_dmabuf_upload_propose_allocation(GstBaseTransform *base,
         return FALSE;
     }
 
-    gst_query_add_allocation_pool(query, self->cuda_pool, size, 4, 0);
+    gst_query_add_allocation_pool(query, self->cuda_pool, size, 8, 0);
     gst_query_add_allocation_meta(query, GST_VIDEO_META_API_TYPE, NULL);
     self->cuda_info = info;
 
@@ -319,7 +319,7 @@ gst_cuda_dmabuf_upload_decide_allocation(GstBaseTransform *base, GstQuery *query
         gst_caps_set_features(caps, 0, gst_caps_features_new("memory:DMABuf", NULL));
     }
 
-    gst_buffer_pool_config_set_params(config, caps, size, 2, 4);
+    gst_buffer_pool_config_set_params(config, caps, size, 4, 8);
     gst_caps_unref(caps);
     gst_buffer_pool_config_add_option(config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
@@ -332,7 +332,7 @@ gst_cuda_dmabuf_upload_decide_allocation(GstBaseTransform *base, GstQuery *query
         return FALSE;
     }
 
-    gst_query_add_allocation_pool(query, self->pool, size, 2, 4);
+    gst_query_add_allocation_pool(query, self->pool, size, 4, 8);
     gst_query_add_allocation_meta(query, GST_VIDEO_META_API_TYPE, NULL);
     return TRUE;
 }
