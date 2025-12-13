@@ -1,0 +1,179 @@
+# GStreamer CUDA DMA-BUF Upload Plugin
+
+A GStreamer element that converts CUDA NV12 video frames to DMA-BUF for zero-copy display on Wayland compositors (like COSMIC, Sway, etc.).
+
+## Features
+
+- **Zero-copy NV12 passthrough**: CUDA → DMA-BUF with NVIDIA tiled modifiers
+- **NV12→BGRx GPU conversion**: Fallback path when compositor doesn't support NV12
+- **Pre-allocated buffer pools**: Minimizes allocation overhead at runtime
+- **Async CUDA operations**: Non-blocking plane copies with stream synchronization
+
+## Requirements
+
+### System Dependencies
+
+- GStreamer 1.20+ with CUDA support (`gstreamer-cuda-1.0`)
+- NVIDIA driver with DMA-BUF support (515+)
+- CUDA Toolkit 12.x
+- GCC 14 (required by nvcc for CUDA compilation)
+- Mesa/GBM for DMA-BUF allocation
+- EGL for CUDA-EGL interop
+
+### Fedora/RHEL
+
+```bash
+sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel \
+    gstreamer1-plugins-bad-free-devel mesa-libgbm-devel libdrm-devel \
+    mesa-libEGL-devel meson ninja-build gcc-c++ gcc-toolset-14-gcc-c++ \
+    gstreamer1-plugin-nvidia  # For nvh264dec
+```
+
+### Ubuntu/Debian
+
+```bash
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev libgbm-dev libdrm-dev \
+    libegl1-mesa-dev meson ninja-build g++-14 \
+    gstreamer1.0-plugins-bad  # For nvh264dec
+```
+
+## Building
+
+### Quick Start
+
+```bash
+# Build
+make build
+
+# Test (requires a test video)
+make test-fakesink
+```
+
+### Manual Build
+
+```bash
+meson setup builddir
+ninja -C builddir
+```
+
+### Install System-Wide
+
+```bash
+sudo ninja -C builddir install
+```
+
+## Usage
+
+### Basic Pipeline
+
+```bash
+# Decode H.264 with NVIDIA decoder → zero-copy to Wayland
+gst-launch-1.0 filesrc location=video.mp4 ! qtdemux ! h264parse ! \
+    nvh264dec ! cudadmabufupload ! waylandsink
+```
+
+### With Custom Test Video
+
+```bash
+export TEST_VIDEO=/path/to/your/video.mp4
+make test-waylandsink
+```
+
+### Element Properties
+
+The `cudadmabufupload` element has no configurable properties. It automatically:
+
+1. Requests CUDA NV12 input from upstream (nvh264dec)
+2. Negotiates NV12 DMA-BUF output with downstream (preferred)
+3. Falls back to XR24 (BGRx) DMA-BUF if compositor doesn't support NV12
+
+### Supported Formats
+
+**Input:**
+- `video/x-raw(memory:CUDAMemory), format=NV12` (preferred)
+- `video/x-raw, format=BGRx`
+
+**Output:**
+- `video/x-raw(memory:DMABuf), format=DMA_DRM, drm-format=NV12:*` (zero-copy)
+- `video/x-raw(memory:DMABuf), format=DMA_DRM, drm-format=XR24:*` (GPU conversion)
+
+## Pipeline Architecture
+
+```
+┌─────────────┐    ┌──────────────┐    ┌───────────────────┐    ┌─────────────┐
+│  filesrc    │───▶│  nvh264dec   │───▶│ cudadmabufupload  │───▶│ waylandsink │
+│             │    │              │    │                   │    │             │
+│  (file)     │    │ (CUDA NV12)  │    │   (DMA-BUF)       │    │ (display)   │
+└─────────────┘    └──────────────┘    └───────────────────┘    └─────────────┘
+                          │                      │
+                          ▼                      ▼
+                   CUDA Memory            GBM Buffer (DMA-BUF)
+                   (GPU tiled)            (NVIDIA modifier)
+```
+
+## Makefile Targets
+
+```bash
+make help           # Show all available targets
+
+# Build
+make build          # Build the plugin
+make rebuild        # Clean and rebuild
+make install        # Install system-wide
+
+# Test
+make test-fakesink  # Test without display
+make test-waylandsink  # Test with Wayland
+make test-debug     # Test with debug logging
+
+# Profile (requires NVIDIA Nsight Systems)
+make profile        # Capture profile
+make profile-stats  # Show summary
+make profile-gui    # Open in GUI
+
+# Development
+make format         # Format source code
+make check-leaks    # Run with Valgrind
+make inspect        # Show plugin info
+```
+
+## Troubleshooting
+
+### "No DMA-BUF modifiers supported"
+
+Your compositor may not support NVIDIA's tiled modifiers. The element will
+fall back to NV12→BGRx conversion (still GPU-accelerated).
+
+### "Failed to initialize CUDA-EGL context"
+
+Check that:
+1. NVIDIA driver is loaded: `nvidia-smi`
+2. DRM render node exists: `ls /dev/dri/renderD*`
+3. EGL is working: `eglinfo`
+
+### Valgrind Shows Leaks
+
+NVIDIA drivers have known false positives. Use the included suppression file:
+
+```bash
+make check-leaks  # Uses nvidia.supp automatically
+```
+
+### CUDA Compilation Requires GCC 14
+
+CUDA 12.9 doesn't support GCC 15's `type_traits`. Ensure GCC 14 is installed:
+
+```bash
+# Fedora
+sudo dnf install gcc-toolset-14-gcc-c++
+
+# Ubuntu
+sudo apt install g++-14
+## License
+
+MIT License - See [LICENSE](LICENSE) file.
+
+## Author
+
+Ericky

@@ -14,18 +14,18 @@ cuda_inc = include_directories('/usr/local/cuda/include')
 nvcc = find_program('/usr/local/cuda-12.9/bin/nvcc', required: true)
 
 # Compile CUDA kernel to object file
-# Use GCC 14 since CUDA 12.9 doesn't support GCC 15
-# Use our patched crt/math_functions.h to fix glibc 2.41 noexcept conflicts
-cuda_compat_dir = meson.current_source_dir() / 'cuda_compat'
+# Note: CUDA 12.9 requires GCC 14 (doesn't support GCC 15 type_traits yet)
+# Use -D flags to prevent glibc 2.41 sinpi/cospi noexcept conflicts
 cuda_kernel = custom_target(
   'cuda_nv12_to_bgrx',
   input: 'cuda_nv12_to_bgrx.cu',
   output: 'cuda_nv12_to_bgrx.o',
   command: [nvcc, '-c', '@INPUT@', '-o', '@OUTPUT@', 
             '-Xcompiler', '-fPIC',
-            '-I' + cuda_compat_dir,  # Our patched headers first
             '-I/usr/local/cuda/include',
             '--compiler-bindir=/usr/bin/gcc-14',
+            '-D__GLIBC_USE_IEC_60559_FUNCS_EXT=0',
+            '-D__GLIBC_USE_IEC_60559_FUNCS_EXT_C23=0',
             '-Wno-deprecated-gpu-targets'],
   build_by_default: true
 )
