@@ -51,7 +51,6 @@ find_nvidia_render_node(void)
             {
                 drmFreeVersion(version);
                 fd = test_fd;
-                g_print("GBM: Found NVIDIA render node: %s\n", path);
                 break;
             }
             drmFreeVersion(version);
