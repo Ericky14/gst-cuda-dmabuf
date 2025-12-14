@@ -30,7 +30,8 @@ find_nvidia_render_node(void)
     struct dirent *entry;
     int fd = -1;
 
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = readdir(dir)) != NULL)
+    {
         /* Only look at render nodes (renderD*) */
         if (strncmp(entry->d_name, "renderD", 7) != 0)
             continue;
@@ -43,9 +44,11 @@ find_nvidia_render_node(void)
             continue;
 
         drmVersionPtr version = drmGetVersion(test_fd);
-        if (version) {
+        if (version)
+        {
             /* Check if this is an NVIDIA device */
-            if (version->name && strcmp(version->name, "nvidia-drm") == 0) {
+            if (version->name && strcmp(version->name, "nvidia-drm") == 0)
+            {
                 drmFreeVersion(version);
                 fd = test_fd;
                 g_print("GBM: Found NVIDIA render node: %s\n", path);
@@ -67,7 +70,8 @@ gst_gbm_dmabuf_pool_start(GstBufferPool *pool)
 
     /* Dynamically find the NVIDIA render node */
     p->drm_fd = find_nvidia_render_node();
-    if (p->drm_fd < 0) {
+    if (p->drm_fd < 0)
+    {
         GST_ERROR_OBJECT(pool, "Failed to find NVIDIA render node");
         return FALSE;
     }
