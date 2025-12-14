@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <dirent.h>
+#include <limits.h>
 #include <xf86drm.h>
 
 G_DEFINE_TYPE(GstGbmDmaBufPool, gst_gbm_dmabuf_pool, GST_TYPE_BUFFER_POOL)
@@ -36,7 +37,7 @@ find_nvidia_render_node(void)
         if (strncmp(entry->d_name, "renderD", 7) != 0)
             continue;
 
-        char path[64];
+        char path[PATH_MAX];
         snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
 
         int test_fd = open(path, O_RDWR | O_CLOEXEC);
