@@ -358,6 +358,18 @@ void cuda_egl_buffer_free(CudaEglContext *ctx, CudaEglBuffer *buf)
     }
 }
 
+void cuda_egl_buffer_destroy_egl_image(CudaEglContext *ctx, CudaEglBuffer *buf)
+{
+    if (!buf)
+        return;
+
+    if (buf->egl_image != EGL_NO_IMAGE_KHR && ctx && ctx->egl_display != EGL_NO_DISPLAY)
+    {
+        _eglDestroyImageKHR(ctx->egl_display, buf->egl_image);
+        buf->egl_image = EGL_NO_IMAGE_KHR;
+    }
+}
+
 CUresult
 cuda_egl_copy_plane_async(const void *src_dev,
                           size_t src_pitch,

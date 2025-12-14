@@ -7,9 +7,16 @@
 
 #define PACKAGE "gst-cuda-dmabuf"
 
+/* Define the debug category here so it's available to all modules */
+GST_DEBUG_CATEGORY(gst_cuda_dmabuf_upload_debug);
+
 static gboolean
 plugin_init(GstPlugin *plugin)
 {
+    /* Initialize debug category before registering elements */
+    GST_DEBUG_CATEGORY_INIT(gst_cuda_dmabuf_upload_debug, "cudadmabufupload", 0,
+                            "CUDA DMA-BUF upload element");
+
     return gst_element_register(
         plugin,
         "cudadmabufupload",

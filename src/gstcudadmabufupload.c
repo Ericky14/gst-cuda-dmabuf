@@ -26,9 +26,6 @@
 /* Pool size for pre-allocated NV12 buffers - larger for smoother playback */
 #define NV12_POOL_SIZE 8
 
-GST_DEBUG_CATEGORY(gst_cuda_dmabuf_upload_debug);
-#define GST_CAT_DEFAULT gst_cuda_dmabuf_upload_debug
-
 /* Private data structure */
 struct _GstCudaDmabufUpload
 {

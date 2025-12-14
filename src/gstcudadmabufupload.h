@@ -18,4 +18,8 @@ G_DECLARE_FINAL_TYPE(
     CUDA_DMABUF_UPLOAD,
     GstBaseTransform)
 
+/* Debug category for this plugin */
+GST_DEBUG_CATEGORY_EXTERN(gst_cuda_dmabuf_upload_debug);
+#define GST_CAT_DEFAULT gst_cuda_dmabuf_upload_debug
+
 G_END_DECLS

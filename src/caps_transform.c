@@ -54,8 +54,12 @@ void caps_transform_add_drm(GstCaps *caps, const gchar *drm_format,
 GstCaps *
 caps_transform_sink_to_src(GstCaps *caps)
 {
+    /* Handle empty caps */
+    if (gst_caps_get_size(caps) == 0)
+        return gst_caps_new_empty();
+
     GstCapsFeatures *features = gst_caps_get_features(caps, 0);
-    gboolean is_cuda = gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY);
+    gboolean is_cuda = features && gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY);
     GstStructure *in_s = gst_caps_get_structure(caps, 0);
     const gchar *in_format = gst_structure_get_string(in_s, "format");
     const GValue *w = gst_structure_get_value(in_s, "width");

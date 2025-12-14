@@ -7,6 +7,7 @@
 
 #include "buffer_transform.h"
 #include "cuda_nv12_to_bgrx.h"
+#include "gstcudadmabufupload.h"
 
 #define GST_USE_UNSTABLE_API
 #include <gst/cuda/gstcuda.h>
@@ -15,9 +16,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <cuda_runtime.h>
-
-#define GST_CAT_DEFAULT gst_cuda_dmabuf_upload_debug
-GST_DEBUG_CATEGORY_EXTERN(GST_CAT_DEFAULT);
 
 gboolean
 buffer_transform_context_init(BufferTransformContext *btx,
@@ -207,6 +205,16 @@ buffer_transform_nv12_to_bgrx(BufferTransformContext *btx,
     /* Unregister CUDA but keep GBM/DMABUF */
     cuGraphicsUnregisterResource(conv_buf.cuda_resource);
     conv_buf.cuda_resource = NULL;
+
+    /* Destroy CUDA stream - no longer needed after sync */
+    if (conv_buf.cuda_stream)
+    {
+        cuStreamDestroy(conv_buf.cuda_stream);
+        conv_buf.cuda_stream = NULL;
+    }
+
+    /* Destroy EGL image - no longer needed after CUDA unregister */
+    cuda_egl_buffer_destroy_egl_image(btx->egl_ctx, &conv_buf);
 
     if (cuda_err != 0)
     {

@@ -126,6 +126,12 @@ CUresult cuda_egl_copy_plane(const void *src_dev,
                              size_t width_bytes,
                              size_t height_rows);
 
+/**
+ * Destroy just the EGL image from a buffer.
+ * Use when transferring ownership of GBM BO and DMABUF FD elsewhere.
+ */
+void cuda_egl_buffer_destroy_egl_image(CudaEglContext *ctx, CudaEglBuffer *buf);
+
 G_END_DECLS
 
 #endif /* __CUDA_EGL_INTEROP_H__ */
