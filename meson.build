@@ -1,7 +1,7 @@
 project(
   'gst-cuda-dmabuf',
   'c',
-  version: '1.1.2',
+  version: '1.1.3',
   meson_version: '>= 1.1.0'
 )
 
