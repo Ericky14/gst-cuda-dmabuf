@@ -13,18 +13,64 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdio.h>
+#include <dirent.h>
+#include <xf86drm.h>
 
 G_DEFINE_TYPE(GstGbmDmaBufPool, gst_gbm_dmabuf_pool, GST_TYPE_BUFFER_POOL)
+
+/* Find an NVIDIA render node dynamically */
+static int
+find_nvidia_render_node(void)
+{
+    DIR *dir = opendir("/dev/dri");
+    if (!dir)
+        return -1;
+
+    struct dirent *entry;
+    int fd = -1;
+
+    while ((entry = readdir(dir)) != NULL) {
+        /* Only look at render nodes (renderD*) */
+        if (strncmp(entry->d_name, "renderD", 7) != 0)
+            continue;
+
+        char path[64];
+        snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
+
+        int test_fd = open(path, O_RDWR | O_CLOEXEC);
+        if (test_fd < 0)
+            continue;
+
+        drmVersionPtr version = drmGetVersion(test_fd);
+        if (version) {
+            /* Check if this is an NVIDIA device */
+            if (version->name && strcmp(version->name, "nvidia-drm") == 0) {
+                drmFreeVersion(version);
+                fd = test_fd;
+                g_print("GBM: Found NVIDIA render node: %s\n", path);
+                break;
+            }
+            drmFreeVersion(version);
+        }
+        close(test_fd);
+    }
+
+    closedir(dir);
+    return fd;
+}
 
 static gboolean
 gst_gbm_dmabuf_pool_start(GstBufferPool *pool)
 {
     GstGbmDmaBufPool *p = (GstGbmDmaBufPool *)pool;
 
-    /* Use NVIDIA GPU (renderD129) as primary */
-    p->drm_fd = open("/dev/dri/renderD129", O_RDWR | O_CLOEXEC);
-    if (p->drm_fd < 0)
+    /* Dynamically find the NVIDIA render node */
+    p->drm_fd = find_nvidia_render_node();
+    if (p->drm_fd < 0) {
+        GST_ERROR_OBJECT(pool, "Failed to find NVIDIA render node");
         return FALSE;
+    }
 
     p->gbm = gbm_create_device(p->drm_fd);
     if (!p->gbm)
