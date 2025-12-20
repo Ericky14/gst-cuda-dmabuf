@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Ericky
+
+name: Publish APT Repository
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish-apt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p apt-repo/pool/main
+          
+          # Get the latest release
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$RELEASE_TAG" ]; then
+            RELEASE_TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          
+          echo "Downloading assets from release: $RELEASE_TAG"
+          
+          # Download .deb files from the release
+          gh release download "$RELEASE_TAG" --pattern "*.deb" --dir apt-repo/pool/main/
+          
+          echo "Downloaded packages:"
+          ls -la apt-repo/pool/main/
+
+      - name: Install APT repo tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+
+      - name: Generate APT repository metadata
+        run: |
+          cd apt-repo
+          
+          mkdir -p dists/stable/main/binary-amd64
+          mkdir -p dists/stable/main/binary-arm64
+          
+          # Generate Packages files for each architecture
+          dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages
+          dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages
+          
+          # Compress Packages files
+          gzip -k dists/stable/main/binary-amd64/Packages
+          gzip -k dists/stable/main/binary-arm64/Packages
+          
+          # Create Release file
+          cat > dists/stable/Release << EOF
+          Origin: gst-cuda-dmabuf
+          Label: gst-cuda-dmabuf
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          Description: GStreamer CUDA DMA-BUF plugin APT repository
+          EOF
+          
+          # Add checksums to Release file
+          cd dists/stable
+          echo "MD5Sum:" >> Release
+          for f in main/binary-*/Packages*; do
+            echo " $(md5sum $f | cut -d' ' -f1) $(wc -c < $f) $f" >> Release
+          done
+          echo "SHA256:" >> Release
+          for f in main/binary-*/Packages*; do
+            echo " $(sha256sum $f | cut -d' ' -f1) $(wc -c < $f) $f" >> Release
+          done
+
+      - name: Create index page
+        run: |
+          cat > apt-repo/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>gst-cuda-dmabuf APT Repository</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+              code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }
+              pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+            </style>
+          </head>
+          <body>
+            <h1>gst-cuda-dmabuf APT Repository</h1>
+            <p>GStreamer CUDA DMA-BUF plugin for zero-copy video processing.</p>
+            
+            <h2>Installation</h2>
+            <pre><code># Add the repository
+echo "deb [trusted=yes] https://ericky14.github.io/gst-cuda-dmabuf stable main" | sudo tee /etc/apt/sources.list.d/gst-cuda-dmabuf.list
+
+# Update and install
+sudo apt update
+sudo apt install gst-cuda-dmabuf</code></pre>
+            
+            <h2>Requirements</h2>
+            <ul>
+              <li>Ubuntu 24.04+ / Pop!_OS 24.04+ / Debian 13+</li>
+              <li>NVIDIA GPU with driver 515+</li>
+              <li>GStreamer 1.24+</li>
+            </ul>
+            
+            <h2>Links</h2>
+            <ul>
+              <li><a href="https://github.com/Ericky14/gst-cuda-dmabuf">GitHub Repository</a></li>
+              <li><a href="https://github.com/Ericky14/gst-cuda-dmabuf/releases">Releases</a></li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apt-repo/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
