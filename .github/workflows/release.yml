@@ -91,8 +91,86 @@ jobs:
           name: rpms
           path: dist/
 
+  build-deb:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            cuda_image: nvidia/cuda:12.6.0-devel-ubuntu24.04
+            platform: linux/amd64
+          - arch: arm64
+            cuda_image: nvidia/cuda:12.6.0-devel-ubuntu24.04
+            platform: linux/arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        if: matrix.arch == 'arm64'
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION=${TAG#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Debian package
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ${{ matrix.cuda_image }} \
+            bash -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential \
+                debhelper \
+                devscripts \
+                meson \
+                ninja-build \
+                pkg-config \
+                libgstreamer1.0-dev \
+                libgstreamer-plugins-base1.0-dev \
+                libgstreamer-plugins-bad1.0-dev \
+                libgbm-dev \
+                libdrm-dev \
+                libegl-dev \
+                git
+              
+              # Create symlink for libcuda.so.1 from stubs
+              ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+              
+              # Build the .deb package
+              dpkg-buildpackage -us -uc -b
+              
+              # Copy to dist for release
+              mkdir -p dist
+              cp ../gst-cuda-dmabuf_*.deb dist/
+              
+              echo "Built packages:"
+              ls -la dist/
+            '
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.arch }}
+          path: dist/
+
   release:
-    needs: build-rpm
+    needs: [build-rpm, build-deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,10 +191,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Download artifacts
+      - name: Download RPM artifacts
         uses: actions/download-artifact@v4
         with:
           name: rpms
+          path: dist/
+
+      - name: Download DEB artifacts (amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: debs-amd64
+          path: dist/
+
+      - name: Download DEB artifacts (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: debs-arm64
           path: dist/
 
       - name: Generate changelog
@@ -140,10 +230,17 @@ jobs:
           echo "sudo dnf install gst-cuda-dmabuf" >> RELEASE_NOTES.md
           echo '```' >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
-          echo "### Manual RPM Install" >> RELEASE_NOTES.md
+          echo "### Manual RPM Install (Fedora/RHEL)" >> RELEASE_NOTES.md
           echo "Download the \`.rpm\` file and install with:" >> RELEASE_NOTES.md
           echo '```bash' >> RELEASE_NOTES.md
           echo "sudo dnf install ./gst-cuda-dmabuf-*.rpm" >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "### Debian/Ubuntu/Pop!_OS" >> RELEASE_NOTES.md
+          echo "Download the \`.deb\` file and install with:" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo "sudo dpkg -i ./gst-cuda-dmabuf_*.deb" >> RELEASE_NOTES.md
+          echo "sudo apt-get install -f  # Install any missing dependencies" >> RELEASE_NOTES.md
           echo '```' >> RELEASE_NOTES.md
 
       - name: Create GitHub Release

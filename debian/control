@@ -1,0 +1,36 @@
+Source: gst-cuda-dmabuf
+Section: libs
+Priority: optional
+Maintainer: Ericky <ericky_k_y@hotmail.com>
+Build-Depends: debhelper-compat (= 13),
+               meson (>= 1.1.0),
+               ninja-build,
+               pkg-config,
+               libgstreamer1.0-dev (>= 1.24),
+               libgstreamer-plugins-base1.0-dev,
+               libgstreamer-plugins-bad1.0-dev,
+               libgbm-dev,
+               libdrm-dev,
+               libegl-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Ericky14/gst-cuda-dmabuf
+Rules-Requires-Root: no
+
+Package: gst-cuda-dmabuf
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         gstreamer1.0-plugins-base,
+         libgbm1,
+         libdrm2,
+         libegl1
+Description: GStreamer CUDA DMA-BUF plugin for zero-copy video processing
+ A GStreamer plugin that uploads video frames from CUDA device memory to
+ Linux DMA-BUF, enabling zero-copy integration with Wayland compositors
+ and other DMA-BUF consumers. Converts NV12 to BGRX using CUDA kernels.
+ .
+ Features:
+  - Zero-copy NV12 passthrough: CUDA → DMA-BUF with NVIDIA tiled modifiers
+  - NV12→BGRx GPU conversion: Fallback path when compositor doesn't support NV12
+  - Pre-allocated buffer pools: Minimizes allocation overhead at runtime
+  - Async CUDA operations: Non-blocking plane copies with stream synchronization

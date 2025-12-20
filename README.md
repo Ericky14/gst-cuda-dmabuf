@@ -122,6 +122,10 @@ make build          # Build the plugin
 make rebuild        # Clean and rebuild
 make install        # Install system-wide
 
+# Packaging
+make rpm            # Build RPM (Fedora/RHEL)
+make deb            # Build .deb (Debian/Ubuntu/Pop!_OS)
+
 # Test
 make test-fakesink  # Test without display
 make test-waylandsink  # Test with Wayland
@@ -136,6 +140,31 @@ make profile-gui    # Open in GUI
 make format         # Format source code
 make check-leaks    # Run with Valgrind
 make inspect        # Show plugin info
+```
+
+## Building Packages
+
+### Fedora/RHEL (RPM)
+
+```bash
+make rpm
+# Output: rpmbuild/RPMS/x86_64/gst-cuda-dmabuf-*.rpm
+sudo dnf install rpmbuild/RPMS/x86_64/gst-cuda-dmabuf-*.rpm
+```
+
+### Debian/Ubuntu/Pop!_OS (DEB)
+
+```bash
+# Install build dependencies
+sudo apt install debhelper-compat meson ninja-build pkg-config \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev libgbm-dev libdrm-dev \
+    libegl-dev nvidia-cuda-toolkit
+
+# Build the package
+make deb
+# Output: ../gst-cuda-dmabuf_*.deb
+sudo dpkg -i ../gst-cuda-dmabuf_*.deb
 ```
 
 ## Troubleshooting

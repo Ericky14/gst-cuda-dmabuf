@@ -12,7 +12,8 @@ export GST_PLUGIN_PATH := $(CURDIR)/$(PLUGIN_PATH):$(GST_PLUGIN_PATH)
 
 .PHONY: all build clean rebuild install test test-fakesink test-waylandsink \
         profile profile-stats profile-gui inspect caps help \
-        rpm rpm-prep rpm-build rpm-clean srpm
+        rpm rpm-prep rpm-build rpm-clean srpm \
+        deb deb-clean deb-docker
 
 # =============================================================================
 # Build targets
@@ -70,6 +71,54 @@ rpm: rpm-prep
 rpm-clean:
 	@echo "Cleaning RPM build directory..."
 	rm -rf $(RPM_BUILD_DIR)
+
+# =============================================================================
+# Debian Package targets
+# =============================================================================
+
+deb:
+	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
+		echo "Error: dpkg-buildpackage not found."; \
+		echo "Debian packages can only be built on Debian-based systems (Ubuntu, Pop!_OS, Debian)."; \
+		echo ""; \
+		echo "On Fedora/RHEL, use 'make rpm' instead."; \
+		echo "The GitHub Actions release workflow will automatically build .deb packages."; \
+		exit 1; \
+	}
+	@echo "Building Debian package for version $(VERSION)..."
+	dpkg-buildpackage -us -uc -b
+	@echo ""
+	@echo "Debian packages created in parent directory:"
+	@ls -lh ../gst-cuda-dmabuf*.deb 2>/dev/null || true
+
+deb-source:
+	@command -v dpkg-buildpackage >/dev/null 2>&1 || { \
+		echo "Error: dpkg-buildpackage not found."; \
+		echo "Debian packages can only be built on Debian-based systems (Ubuntu, Pop!_OS, Debian)."; \
+		exit 1; \
+	}
+	@echo "Building Debian source package for version $(VERSION)..."
+	dpkg-buildpackage -us -uc -S
+	@echo ""
+	@echo "Source package created in parent directory:"
+	@ls -lh ../gst-cuda-dmabuf*.dsc 2>/dev/null || true
+
+deb-clean:
+	@echo "Cleaning Debian build artifacts..."
+	rm -rf debian/.debhelper debian/gst-cuda-dmabuf debian/debhelper-build-stamp
+	rm -rf debian/files debian/*.substvars debian/*.log
+	rm -f ../gst-cuda-dmabuf*.deb ../gst-cuda-dmabuf*.buildinfo ../gst-cuda-dmabuf*.changes
+	rm -f ../gst-cuda-dmabuf*.dsc ../gst-cuda-dmabuf*.tar.*
+	rm -rf dist/*.deb
+
+deb-docker:
+	@echo "Building Debian package in Docker for version $(VERSION)..."
+	mkdir -p dist
+	docker build -f Dockerfile.deb -t gst-cuda-dmabuf-deb .
+	docker run --rm -v $(CURDIR)/dist:/dist:z gst-cuda-dmabuf-deb
+	@echo ""
+	@echo "Debian packages created in dist/:"
+	@ls -lh dist/*.deb 2>/dev/null || true
 
 # =============================================================================
 # Test targets
@@ -208,10 +257,16 @@ help:
 	@echo "  make rebuild        - Clean and rebuild"
 	@echo "  make install        - Install the plugin"
 	@echo ""
-	@echo "RPM Package targets:"
+	@echo "RPM Package targets (Fedora/RHEL):"
 	@echo "  make rpm            - Build binary RPM"
 	@echo "  make srpm           - Build source RPM"
 	@echo "  make rpm-clean      - Clean RPM build directory"
+	@echo ""
+	@echo "Debian Package targets (Ubuntu/Debian/Pop!_OS):"
+	@echo "  make deb            - Build binary .deb package (requires Debian-based OS)"
+	@echo "  make deb-docker     - Build .deb package using Docker (works on any OS)"
+	@echo "  make deb-source     - Build source package"
+	@echo "  make deb-clean      - Clean Debian build artifacts"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test           - Test with waylandsink (default)"

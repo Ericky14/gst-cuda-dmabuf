@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		--prefix=/usr \
+		--libdir=/usr/lib/$(DEB_HOST_MULTIARCH)
+
+override_dh_shlibdeps:
+	dh_shlibdeps -l/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64 -- --ignore-missing-info

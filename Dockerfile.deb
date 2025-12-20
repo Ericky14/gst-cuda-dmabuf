@@ -1,0 +1,38 @@
+# Dockerfile for building Debian packages
+# Usage:
+#   docker build -f Dockerfile.deb -t gst-cuda-dmabuf-deb .
+#   docker run --rm -v $(pwd)/dist:/dist gst-cuda-dmabuf-deb
+
+FROM nvidia/cuda:12.6.0-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    debhelper \
+    devscripts \
+    meson \
+    ninja-build \
+    pkg-config \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
+    libgbm-dev \
+    libdrm-dev \
+    libegl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlink for libcuda.so.1 from stubs (needed for dpkg-shlibdeps)
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+
+WORKDIR /build
+
+# Copy source
+COPY . /build/
+
+# Build the package
+RUN dpkg-buildpackage -us -uc -b
+
+# Copy built packages to /dist on run
+CMD ["sh", "-c", "cp /gst-cuda-dmabuf*.deb /dist/ && echo 'Debian packages copied to dist/:' && ls -lh /dist/*.deb"]
