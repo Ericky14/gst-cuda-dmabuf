@@ -15,6 +15,7 @@ cd "$PROJECT_ROOT"
 # Files containing version
 MESON_BUILD="meson.build"
 SPEC_FILE="gst-cuda-dmabuf.spec"
+DEBIAN_CHANGELOG="debian/changelog"
 
 # Get current version from meson.build
 CURRENT_VERSION=$(grep -oP "version:\s*'\K[0-9]+\.[0-9]+\.[0-9]+" "$MESON_BUILD")
@@ -81,10 +82,19 @@ CHANGELOG_ENTRY="* $TODAY Ericky <ericky_k_y@hotmail.com> - $NEW_VERSION-1\n- Ve
 sed -i "/%changelog/a\\$CHANGELOG_ENTRY" "$SPEC_FILE"
 echo "✓ Added changelog entry"
 
+# Update debian/changelog
+if [ -f "$DEBIAN_CHANGELOG" ]; then
+    DEB_DATE=$(date -R)
+    DEB_ENTRY="gst-cuda-dmabuf ($NEW_VERSION-1) unstable; urgency=medium\n\n  * Version bump to $NEW_VERSION\n\n -- Ericky <ericky_k_y@hotmail.com>  $DEB_DATE\n"
+    # Prepend to debian/changelog
+    echo -e "$DEB_ENTRY" | cat - "$DEBIAN_CHANGELOG" > /tmp/deb_changelog_tmp && mv /tmp/deb_changelog_tmp "$DEBIAN_CHANGELOG"
+    echo "✓ Updated $DEBIAN_CHANGELOG"
+fi
+
 # Git operations
 echo ""
 echo "Staging changes..."
-git add "$MESON_BUILD" "$SPEC_FILE"
+git add "$MESON_BUILD" "$SPEC_FILE" "$DEBIAN_CHANGELOG"
 
 echo "Creating commit..."
 git commit -m "chore: bump version to $NEW_VERSION"
