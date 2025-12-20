@@ -65,15 +65,16 @@ jobs:
           gzip -k dists/stable/main/binary-arm64/Packages
           
           # Create Release file
-          cat > dists/stable/Release << EOF
+          cat > dists/stable/Release << RELEASEEOF
           Origin: gst-cuda-dmabuf
           Label: gst-cuda-dmabuf
           Suite: stable
           Codename: stable
+          Date: $(date -Ru)
           Architectures: amd64 arm64
           Components: main
           Description: GStreamer CUDA DMA-BUF plugin APT repository
-          EOF
+          RELEASEEOF
           
           # Add checksums to Release file
           cd dists/stable
