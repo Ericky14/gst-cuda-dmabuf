@@ -16,6 +16,58 @@
 #include <unistd.h>
 #include <string.h>
 #include <cuda_runtime.h>
+#include <dirent.h>
+#include <limits.h>
+#include <xf86drm.h>
+#include <fcntl.h>
+#include <stdio.h>
+
+/* Find NVIDIA render node path dynamically */
+static const gchar *
+find_nvidia_render_node_path(void)
+{
+    static gchar nvidia_path[PATH_MAX] = {0};
+    
+    if (nvidia_path[0] != '\0')
+        return nvidia_path;
+
+    DIR *dir = opendir("/dev/dri");
+    if (!dir)
+        return "/dev/dri/renderD128"; /* fallback */
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (strncmp(entry->d_name, "renderD", 7) != 0)
+            continue;
+
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
+
+        int fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0)
+            continue;
+
+        drmVersionPtr version = drmGetVersion(fd);
+        if (version)
+        {
+            if (version->name && strcmp(version->name, "nvidia-drm") == 0)
+            {
+                drmFreeVersion(version);
+                close(fd);
+                strncpy(nvidia_path, path, sizeof(nvidia_path) - 1);
+                closedir(dir);
+                g_info("Found NVIDIA render node: %s", nvidia_path);
+                return nvidia_path;
+            }
+            drmFreeVersion(version);
+        }
+        close(fd);
+    }
+
+    closedir(dir);
+    return "/dev/dri/renderD128"; /* fallback */
+}
 
 gboolean
 buffer_transform_context_init(BufferTransformContext *btx,
@@ -28,9 +80,10 @@ buffer_transform_context_init(BufferTransformContext *btx,
     /* Initialize EGL context if needed */
     if (!egl_ctx->initialized)
     {
-        if (!cuda_egl_context_init(egl_ctx, "/dev/dri/renderD129"))
+        const gchar *drm_device = find_nvidia_render_node_path();
+        if (!cuda_egl_context_init(egl_ctx, drm_device))
         {
-            GST_ERROR("Failed to initialize CUDA-EGL context");
+            GST_ERROR("Failed to initialize CUDA-EGL context with %s", drm_device);
             return FALSE;
         }
     }
