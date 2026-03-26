@@ -15,7 +15,8 @@ pooled_buffer_pool_init(PooledBufferPool *pool,
                         guint width,
                         guint height,
                         guint32 format,
-                        guint64 modifier)
+                        guint64 modifier,
+                        gboolean force_linear)
 {
     g_return_val_if_fail(pool != NULL, FALSE);
     g_return_val_if_fail(ctx != NULL && ctx->initialized, FALSE);
@@ -35,14 +36,15 @@ pooled_buffer_pool_init(PooledBufferPool *pool,
     pool->height = height;
     pool->format = format;
     pool->modifier = modifier;
+    pool->force_linear = force_linear;
 
-    g_info("Initializing buffer pool: %ux%u, format=0x%x, modifier=0x%016lx, size=%u",
-           width, height, format, modifier, pool_size);
+    g_info("Initializing buffer pool: %ux%u, format=0x%x, modifier=0x%016lx, size=%u, force_linear=%s",
+           width, height, format, modifier, pool_size, force_linear ? "TRUE" : "FALSE");
 
     for (guint i = 0; i < pool_size; i++)
     {
         if (!cuda_egl_buffer_alloc(ctx, &pool->buffers[i],
-                                   width, height, format, modifier))
+                                   width, height, format, modifier, force_linear))
         {
             g_warning("Failed to allocate buffer %u in pool", i);
 
@@ -56,10 +58,11 @@ pooled_buffer_pool_init(PooledBufferPool *pool,
             return FALSE;
         }
 
-        g_debug("Pool buffer %u: fd=%d, strides=[%u,%u], offsets=[%u,%u]",
+        g_debug("Pool buffer %u: fd=%d, strides=[%u,%u], offsets=[%u,%u], modifier=0x%016lx",
                 i, pool->buffers[i].dmabuf_fd,
                 pool->buffers[i].strides[0], pool->buffers[i].strides[1],
-                pool->buffers[i].offsets[0], pool->buffers[i].offsets[1]);
+                pool->buffers[i].offsets[0], pool->buffers[i].offsets[1],
+                pool->buffers[i].modifier);
     }
 
     pool->current_index = 0;

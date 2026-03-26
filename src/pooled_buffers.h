@@ -30,6 +30,7 @@ typedef struct _PooledBufferPool
     guint height;
     guint32 format;
     guint64 modifier;
+    gboolean force_linear;
 
     gboolean initialized;
 } PooledBufferPool;
@@ -44,6 +45,7 @@ typedef struct _PooledBufferPool
  * @param height Buffer height
  * @param format GBM format (GBM_FORMAT_NV12 or GBM_FORMAT_XRGB8888)
  * @param modifier DRM modifier
+ * @param force_linear If TRUE, force LINEAR modifier for Vulkan compatibility
  * @return TRUE on success
  */
 gboolean pooled_buffer_pool_init(PooledBufferPool *pool,
@@ -52,7 +54,8 @@ gboolean pooled_buffer_pool_init(PooledBufferPool *pool,
                                  guint width,
                                  guint height,
                                  guint32 format,
-                                 guint64 modifier);
+                                 guint64 modifier,
+                                 gboolean force_linear);
 
 /**
  * Clean up a buffer pool and free all resources.

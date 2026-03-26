@@ -32,9 +32,10 @@ void caps_transform_add_drm(GstCaps *caps, const gchar *drm_format,
  * BGRx → XR24 DMA-BUF
  *
  * @param caps Input caps from sink
+ * @param force_linear If TRUE, only advertise linear modifiers (0x0)
  * @return Transformed caps for source (caller owns reference)
  */
-GstCaps *caps_transform_sink_to_src(GstCaps *caps);
+GstCaps *caps_transform_sink_to_src(GstCaps *caps, gboolean force_linear);
 
 /**
  * Transform source caps to sink caps (reverse direction).

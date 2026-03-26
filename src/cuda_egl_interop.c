@@ -161,7 +161,8 @@ cuda_egl_buffer_alloc(CudaEglContext *ctx,
                       guint width,
                       guint height,
                       guint32 format,
-                      guint64 modifier)
+                      guint64 modifier,
+                      gboolean force_linear)
 {
     g_return_val_if_fail(ctx != NULL && ctx->initialized, FALSE);
     g_return_val_if_fail(buf != NULL, FALSE);
@@ -172,14 +173,22 @@ cuda_egl_buffer_alloc(CudaEglContext *ctx,
     buf->height = height;
     buf->format = format;
 
-    /* Try to create with requested modifier */
-    if (modifier != DRM_FORMAT_MOD_INVALID && modifier != DRM_FORMAT_MOD_LINEAR)
+    /* Try to create with requested modifier (unless force_linear is set) */
+    if (!force_linear && modifier != DRM_FORMAT_MOD_INVALID && modifier != DRM_FORMAT_MOD_LINEAR)
     {
         uint64_t mods[] = {modifier};
         buf->bo = gbm_bo_create_with_modifiers(ctx->gbm, width, height, format, mods, 1);
     }
 
-    /* Fallback to LINEAR */
+    /* Fallback to LINEAR using gbm_bo_create_with_modifiers (more reliable than GBM_BO_USE_LINEAR flag) */
+    if (!buf->bo)
+    {
+        uint64_t linear_mod[] = {DRM_FORMAT_MOD_LINEAR};
+        buf->bo = gbm_bo_create_with_modifiers(ctx->gbm, width, height, format, linear_mod, 1);
+        modifier = DRM_FORMAT_MOD_LINEAR;
+    }
+
+    /* Final fallback using GBM_BO_USE_LINEAR flag */
     if (!buf->bo)
     {
         buf->bo = gbm_bo_create(ctx->gbm, width, height, format,

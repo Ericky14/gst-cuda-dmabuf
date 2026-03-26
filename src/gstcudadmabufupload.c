@@ -26,6 +26,13 @@
 /* Pool size for pre-allocated NV12 buffers - larger for smoother playback */
 #define NV12_POOL_SIZE 8
 
+/* Property IDs */
+enum
+{
+    PROP_0,
+    PROP_FORCE_LINEAR,
+};
+
 /* Private data structure */
 struct _GstCudaDmabufUpload
 {
@@ -46,6 +53,9 @@ struct _GstCudaDmabufUpload
 
     /* Flags */
     gboolean cuda_input;
+
+    /* Properties */
+    gboolean force_linear;
 
     /* CUDA-EGL interop context */
     CudaEglContext egl_ctx;
@@ -101,13 +111,13 @@ static GstStaticPadTemplate src_template =
             "NV12:0x0300000000e08012, NV12:0x0300000000e08013, NV12:0x0300000000e08014, "
             "NV12:0x0300000000e08015, NV12:0x0, NV12:0x100000000000001}"
             "; "
-            /* XR24 with NVIDIA tiled modifiers - fallback with conversion */
+            /* XR24 with linear modifier - for Vulkan/wgpu compatibility */
             "video/x-raw(memory:DMABuf),"
             "format=(string)DMA_DRM,"
             "width=(int)[1,MAX],"
             "height=(int)[1,MAX],"
             "framerate=(fraction)[0/1,MAX],"
-            "drm-format=(string){XR24:0x0300000000606010, XR24:0x0300000000606011, "
+            "drm-format=(string){XR24:0x0, XR24:0x0300000000606010, XR24:0x0300000000606011, "
             "XR24:0x0300000000606012, XR24:0x0300000000606013, XR24:0x0300000000606014, "
             "XR24:0x0300000000606015, XR24:0x0300000000e08010, XR24:0x0300000000e08011, "
             "XR24:0x0300000000e08012, XR24:0x0300000000e08013, XR24:0x0300000000e08014, "
@@ -179,8 +189,9 @@ gst_cuda_dmabuf_upload_transform_caps(GstBaseTransform *base,
 
     if (direction == GST_PAD_SINK)
     {
-        /* sink → src */
-        outcaps = caps_transform_sink_to_src(caps);
+        GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(base);
+        /* sink → src: respect force-linear property */
+        outcaps = caps_transform_sink_to_src(caps, self->force_linear);
     }
     else
     {
@@ -368,7 +379,8 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             pooled_buffer_pool_cleanup(&self->nv12_pool, &self->egl_ctx);
             if (!pooled_buffer_pool_init(&self->nv12_pool, &self->egl_ctx,
                                          NV12_POOL_SIZE, width, height,
-                                         GBM_FORMAT_NV12, self->negotiated_modifier))
+                                         GBM_FORMAT_NV12, self->negotiated_modifier,
+                                         self->force_linear))
             {
                 GST_ERROR_OBJECT(self, "Failed to initialize NV12 buffer pool");
                 return GST_FLOW_ERROR;
@@ -424,6 +436,41 @@ gst_cuda_dmabuf_upload_transform(GstBaseTransform *base, GstBuffer *inbuf, GstBu
  * ============================================================================ */
 
 static void
+gst_cuda_dmabuf_upload_set_property(GObject *object, guint prop_id,
+                                    const GValue *value, GParamSpec *pspec)
+{
+    GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
+
+    switch (prop_id)
+    {
+    case PROP_FORCE_LINEAR:
+        self->force_linear = g_value_get_boolean(value);
+        GST_INFO_OBJECT(self, "force-linear set to %s", self->force_linear ? "TRUE" : "FALSE");
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+        break;
+    }
+}
+
+static void
+gst_cuda_dmabuf_upload_get_property(GObject *object, guint prop_id,
+                                    GValue *value, GParamSpec *pspec)
+{
+    GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
+
+    switch (prop_id)
+    {
+    case PROP_FORCE_LINEAR:
+        g_value_set_boolean(value, self->force_linear);
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+        break;
+    }
+}
+
+static void
 gst_cuda_dmabuf_upload_finalize(GObject *object)
 {
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
@@ -460,6 +507,22 @@ gst_cuda_dmabuf_upload_class_init(GstCudaDmabufUploadClass *klass)
     GstBaseTransformClass *base_class = GST_BASE_TRANSFORM_CLASS(klass);
 
     gobject_class->finalize = gst_cuda_dmabuf_upload_finalize;
+    gobject_class->set_property = gst_cuda_dmabuf_upload_set_property;
+    gobject_class->get_property = gst_cuda_dmabuf_upload_get_property;
+
+    /**
+     * GstCudaDmabufUpload:force-linear:
+     *
+     * Force LINEAR modifier for DMA-BUF output instead of NVIDIA tiled formats.
+     * This is useful for applications that import DMA-BUFs via Vulkan, as the
+     * Vulkan DMA-BUF import path does not support tiled modifiers with plane offsets.
+     */
+    g_object_class_install_property(gobject_class, PROP_FORCE_LINEAR,
+                                    g_param_spec_boolean("force-linear",
+                                                         "Force Linear",
+                                                         "Force LINEAR modifier instead of tiled formats for Vulkan compatibility",
+                                                         FALSE,
+                                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
     gst_element_class_add_pad_template(element_class,
                                        gst_static_pad_template_get(&sink_template));
@@ -487,6 +550,7 @@ gst_cuda_dmabuf_upload_init(GstCudaDmabufUpload *self)
     gst_video_info_init(&self->info);
     gst_video_info_init(&self->cuda_info);
     self->negotiated_modifier = DRM_FORMAT_MOD_INVALID;
+    self->force_linear = FALSE;
     memset(&self->egl_ctx, 0, sizeof(CudaEglContext));
     memset(&self->nv12_pool, 0, sizeof(PooledBufferPool));
     memset(&self->btx, 0, sizeof(BufferTransformContext));

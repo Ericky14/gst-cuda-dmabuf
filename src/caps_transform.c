@@ -23,8 +23,9 @@ static const char *nv12_modifiers[] = {
     "NV12:0x0300000000e08014", "NV12:0x0300000000e08015",
     "NV12:0x0", "NV12:0x100000000000001", NULL};
 
-/* XR24 modifiers supported */
+/* XR24 modifiers supported - linear (0x0) first for Vulkan/wgpu compatibility */
 static const char *xr24_modifiers[] = {
+    "XR24:0x0",
     "XR24:0x0300000000606010", "XR24:0x0300000000606011",
     "XR24:0x0300000000606012", "XR24:0x0300000000606013",
     "XR24:0x0300000000606014", "XR24:0x0300000000606015", NULL};
@@ -52,7 +53,7 @@ void caps_transform_add_drm(GstCaps *caps, const gchar *drm_format,
 }
 
 GstCaps *
-caps_transform_sink_to_src(GstCaps *caps)
+caps_transform_sink_to_src(GstCaps *caps, gboolean force_linear)
 {
     /* Handle empty caps */
     if (gst_caps_get_size(caps) == 0)
@@ -70,19 +71,35 @@ caps_transform_sink_to_src(GstCaps *caps)
 
     if (is_cuda && g_strcmp0(in_format, "NV12") == 0)
     {
-        /* CUDA NV12 → NV12 DMA-BUF (preferred) */
-        for (int i = 0; nv12_modifiers[i]; i++)
-            caps_transform_add_drm(outcaps, nv12_modifiers[i], w, h, fr);
+        if (force_linear)
+        {
+            /* force-linear: only advertise linear modifiers */
+            caps_transform_add_drm(outcaps, "NV12:0x0", w, h, fr);
+            caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
+        }
+        else
+        {
+            /* CUDA NV12 → NV12 DMA-BUF (preferred) */
+            for (int i = 0; nv12_modifiers[i]; i++)
+                caps_transform_add_drm(outcaps, nv12_modifiers[i], w, h, fr);
 
-        /* Fallback to XR24 with conversion */
-        for (int i = 0; xr24_modifiers[i]; i++)
-            caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+            /* Fallback to XR24 with conversion */
+            for (int i = 0; xr24_modifiers[i]; i++)
+                caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+        }
     }
     else if (g_strcmp0(in_format, "BGRx") == 0)
     {
-        /* BGRx → XR24 DMA-BUF */
-        for (int i = 0; xr24_modifiers[i] && i < 3; i++)
-            caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+        if (force_linear)
+        {
+            caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
+        }
+        else
+        {
+            /* BGRx → XR24 DMA-BUF */
+            for (int i = 0; xr24_modifiers[i] && i < 3; i++)
+                caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+        }
     }
 
     return outcaps;

@@ -82,6 +82,7 @@ typedef struct _CudaEglBuffer
  * @param height Buffer height
  * @param format GBM format (e.g., GBM_FORMAT_NV12, GBM_FORMAT_XRGB8888)
  * @param modifier DRM modifier for tiling (or DRM_FORMAT_MOD_LINEAR)
+ * @param force_linear If TRUE, skip tiled modifier and use LINEAR directly
  * @return TRUE on success
  */
 gboolean cuda_egl_buffer_alloc(CudaEglContext *ctx,
@@ -89,7 +90,8 @@ gboolean cuda_egl_buffer_alloc(CudaEglContext *ctx,
                                guint width,
                                guint height,
                                guint32 format,
-                               guint64 modifier);
+                               guint64 modifier,
+                               gboolean force_linear);
 
 /**
  * Free a CUDA-EGL buffer and all associated resources.

@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <xf86drm.h>
+#include <drm/drm_fourcc.h>
 #include <fcntl.h>
 #include <stdio.h>
 
@@ -223,10 +224,11 @@ buffer_transform_nv12_to_bgrx(BufferTransformContext *btx,
     gint uv_stride = in_vmeta ? in_vmeta->stride[1] : (gint)width;
     gsize uv_offset = in_vmeta ? in_vmeta->offset[1] : (gsize)width * height;
 
-    /* Allocate single-use buffer for conversion */
+    /* Allocate single-use buffer for conversion
+     * Force linear for XR24 since CUDA doesn't support tiled XR24 EGL interop */
     CudaEglBuffer conv_buf;
     if (!cuda_egl_buffer_alloc(btx->egl_ctx, &conv_buf, width, height,
-                               GBM_FORMAT_XRGB8888, btx->negotiated_modifier))
+                               GBM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, TRUE))
     {
         GST_ERROR("Failed to allocate conversion buffer");
         return GST_FLOW_ERROR;
