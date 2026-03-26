@@ -35,6 +35,16 @@ guint32 drm_format_get_fourcc(const gchar *drm_format);
 gboolean drm_format_is_nv12(const gchar *drm_format);
 
 /**
+ * Check if a drm-format string represents P010 (10-bit 4:2:0).
+ */
+gboolean drm_format_is_p010(const gchar *drm_format);
+
+/**
+ * Check if a drm-format string represents NV12 or P010 (semi-planar 4:2:0).
+ */
+gboolean drm_format_is_semi_planar_420(const gchar *drm_format);
+
+/**
  * Check if a drm-format string represents XR24 (BGRx).
  */
 gboolean drm_format_is_xr24(const gchar *drm_format);

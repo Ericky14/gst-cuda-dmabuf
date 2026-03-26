@@ -28,7 +28,7 @@ static const gchar *
 find_nvidia_render_node_path(void)
 {
     static gchar nvidia_path[PATH_MAX] = {0};
-    
+
     if (nvidia_path[0] != '\0')
         return nvidia_path;
 
@@ -97,11 +97,12 @@ buffer_transform_context_init(BufferTransformContext *btx,
 }
 
 GstFlowReturn
-buffer_transform_nv12_passthrough(BufferTransformContext *btx,
-                                  PooledBufferPool *pool,
-                                  GstBuffer *inbuf,
-                                  GstBuffer **outbuf,
-                                  const GstVideoInfo *info)
+buffer_transform_semi_planar_passthrough(BufferTransformContext *btx,
+                                         PooledBufferPool *pool,
+                                         GstBuffer *inbuf,
+                                         GstBuffer **outbuf,
+                                         const GstVideoInfo *info,
+                                         gboolean is_p010)
 {
     GstMemory *mem = gst_buffer_peek_memory(inbuf, 0);
     if (!gst_is_cuda_memory(mem))
@@ -113,11 +114,15 @@ buffer_transform_nv12_passthrough(BufferTransformContext *btx,
     guint width = GST_VIDEO_INFO_WIDTH(info);
     guint height = GST_VIDEO_INFO_HEIGHT(info);
 
+    /* P010 has 16-bit (2 byte) samples, NV12 has 8-bit (1 byte) */
+    guint bytes_per_sample = is_p010 ? 2 : 1;
+    guint width_bytes = width * bytes_per_sample;
+
     /* Get input strides */
     GstVideoMeta *in_vmeta = gst_buffer_get_video_meta(inbuf);
-    gint y_stride_in = in_vmeta ? in_vmeta->stride[0] : (gint)width;
-    gint uv_stride_in = in_vmeta ? in_vmeta->stride[1] : (gint)width;
-    gsize uv_offset_in = in_vmeta ? in_vmeta->offset[1] : (gsize)width * height;
+    gint y_stride_in = in_vmeta ? in_vmeta->stride[0] : (gint)width_bytes;
+    gint uv_stride_in = in_vmeta ? in_vmeta->stride[1] : (gint)width_bytes;
+    gsize uv_offset_in = in_vmeta ? in_vmeta->offset[1] : (gsize)width_bytes * height;
 
     /* Acquire next buffer from pool */
     CudaEglBuffer *pool_buf = pooled_buffer_pool_acquire(pool);
@@ -141,7 +146,7 @@ buffer_transform_nv12_passthrough(BufferTransformContext *btx,
     CUresult cu_res = cuda_egl_copy_plane_async(
         in_base, (size_t)y_stride_in,
         &pool_buf->cuda_frame, 0,
-        (size_t)width, (size_t)height,
+        (size_t)width_bytes, (size_t)height,
         pool_buf->cuda_stream);
 
     if (cu_res != CUDA_SUCCESS)
@@ -151,11 +156,11 @@ buffer_transform_nv12_passthrough(BufferTransformContext *btx,
         return GST_FLOW_ERROR;
     }
 
-    /* Async copy UV plane */
+    /* Async copy UV plane (interleaved U/V, half height) */
     cu_res = cuda_egl_copy_plane_async(
         in_base + uv_offset_in, (size_t)uv_stride_in,
         &pool_buf->cuda_frame, 1,
-        (size_t)width, (size_t)(height / 2),
+        (size_t)width_bytes, (size_t)(height / 2),
         pool_buf->cuda_stream);
 
     if (cu_res != CUDA_SUCCESS)
@@ -189,16 +194,121 @@ buffer_transform_nv12_passthrough(BufferTransformContext *btx,
     *outbuf = gst_buffer_new();
     gst_buffer_append_memory(*outbuf, dmabuf_mem);
 
-    /* Add video meta with actual NV12 format for proper stride/offset handling */
+    /* Add video meta with actual pixel format for proper stride/offset handling */
+    GstVideoFormat vid_fmt = is_p010 ? GST_VIDEO_FORMAT_P010_10LE : GST_VIDEO_FORMAT_NV12;
     gsize offsets[4] = {0, pool_buf->offsets[1], 0, 0};
     gint strides[4] = {(gint)pool_buf->strides[0], (gint)pool_buf->strides[1], 0, 0};
     gst_buffer_add_video_meta_full(*outbuf, GST_VIDEO_FRAME_FLAG_NONE,
-                                   GST_VIDEO_FORMAT_NV12, width, height, 2, offsets, strides);
+                                   vid_fmt, width, height, 2, offsets, strides);
 
     /* Copy timestamps */
     GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);
     GST_BUFFER_DTS(*outbuf) = GST_BUFFER_DTS(inbuf);
     GST_BUFFER_DURATION(*outbuf) = GST_BUFFER_DURATION(inbuf);
+
+    return GST_FLOW_OK;
+}
+
+GstFlowReturn
+buffer_transform_cuda_export(BufferTransformContext *btx,
+                             GstBuffer *inbuf,
+                             GstBuffer **outbuf,
+                             const GstVideoInfo *info)
+{
+    GstMemory *mem = gst_buffer_peek_memory(inbuf, 0);
+    if (!gst_is_cuda_memory(mem))
+    {
+        GST_ERROR("Expected CUDA memory for direct export");
+        return GST_FLOW_ERROR;
+    }
+
+    GstCudaMemory *cmem = GST_CUDA_MEMORY_CAST(mem);
+
+    /* Verify this is MMAP-allocated (required for DMA-BUF export) */
+    if (gst_cuda_memory_get_alloc_method(cmem) != GST_CUDA_MEMORY_ALLOC_MMAP)
+    {
+        GST_ERROR("CUDA memory is not MMAP-allocated, cannot export as DMA-BUF");
+        return GST_FLOW_ERROR;
+    }
+
+    /* Sync CUDA operations before exporting */
+    gst_cuda_memory_sync(cmem);
+
+    /* Export CUDA memory as a POSIX file descriptor (DMA-BUF) */
+    int fd = -1;
+    if (!gst_cuda_memory_export(cmem, &fd))
+    {
+        GST_ERROR("Failed to export CUDA memory as DMA-BUF");
+        return GST_FLOW_ERROR;
+    }
+
+    guint width = GST_VIDEO_INFO_WIDTH(info);
+    guint height = GST_VIDEO_INFO_HEIGHT(info);
+
+    /* Get stride/offset from video meta on the input buffer */
+    GstVideoMeta *in_vmeta = gst_buffer_get_video_meta(inbuf);
+    GstVideoFormat vid_fmt = GST_VIDEO_INFO_FORMAT(info);
+
+    /* Calculate total size from video info or strides */
+    gsize total_size;
+    gint strides[4] = {0};
+    gsize offsets[4] = {0};
+    guint n_planes;
+
+    if (in_vmeta)
+    {
+        n_planes = in_vmeta->n_planes;
+        for (guint i = 0; i < n_planes && i < 4; i++)
+        {
+            strides[i] = in_vmeta->stride[i];
+            offsets[i] = in_vmeta->offset[i];
+        }
+        /* Calculate total size: last plane offset + last plane data */
+        if (n_planes == 2)
+        {
+            total_size = offsets[1] + (gsize)strides[1] * (height / 2);
+        }
+        else
+        {
+            total_size = (gsize)strides[0] * height;
+        }
+    }
+    else
+    {
+        total_size = GST_VIDEO_INFO_SIZE(info);
+        n_planes = GST_VIDEO_INFO_N_PLANES(info);
+        for (guint i = 0; i < n_planes && i < 4; i++)
+        {
+            strides[i] = GST_VIDEO_INFO_PLANE_STRIDE(info, i);
+            offsets[i] = GST_VIDEO_INFO_PLANE_OFFSET(info, i);
+        }
+    }
+
+    /* Create DMA-BUF allocator if needed */
+    if (!btx->dmabuf_allocator)
+        btx->dmabuf_allocator = gst_dmabuf_allocator_new();
+
+    GstMemory *dmabuf_mem = gst_dmabuf_allocator_alloc(btx->dmabuf_allocator, fd, total_size);
+    if (!dmabuf_mem)
+    {
+        close(fd);
+        GST_ERROR("Failed to wrap CUDA DMA-BUF fd in allocator");
+        return GST_FLOW_ERROR;
+    }
+
+    *outbuf = gst_buffer_new();
+    gst_buffer_append_memory(*outbuf, dmabuf_mem);
+
+    /* Add video meta with correct format and plane info */
+    gst_buffer_add_video_meta_full(*outbuf, GST_VIDEO_FRAME_FLAG_NONE,
+                                   vid_fmt, width, height, n_planes, offsets, strides);
+
+    /* Copy timestamps */
+    GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);
+    GST_BUFFER_DTS(*outbuf) = GST_BUFFER_DTS(inbuf);
+    GST_BUFFER_DURATION(*outbuf) = GST_BUFFER_DURATION(inbuf);
+
+    GST_LOG("CUDA direct DMA-BUF export: fd=%d, %ux%u, size=%zu", fd, width, height, total_size);
 
     return GST_FLOW_OK;
 }

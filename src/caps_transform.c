@@ -23,6 +23,16 @@ static const char *nv12_modifiers[] = {
     "NV12:0x0300000000e08014", "NV12:0x0300000000e08015",
     "NV12:0x0", "NV12:0x100000000000001", NULL};
 
+/* P010 (10-bit 4:2:0) modifiers supported - same NVIDIA tiled modifiers as NV12 */
+static const char *p010_modifiers[] = {
+    "P010:0x0300000000606010", "P010:0x0300000000606011",
+    "P010:0x0300000000606012", "P010:0x0300000000606013",
+    "P010:0x0300000000606014", "P010:0x0300000000606015",
+    "P010:0x0300000000e08010", "P010:0x0300000000e08011",
+    "P010:0x0300000000e08012", "P010:0x0300000000e08013",
+    "P010:0x0300000000e08014", "P010:0x0300000000e08015",
+    "P010:0x0", "P010:0x100000000000001", NULL};
+
 /* XR24 modifiers supported - linear (0x0) first for Vulkan/wgpu compatibility */
 static const char *xr24_modifiers[] = {
     "XR24:0x0",
@@ -59,49 +69,64 @@ caps_transform_sink_to_src(GstCaps *caps, gboolean force_linear)
     if (gst_caps_get_size(caps) == 0)
         return gst_caps_new_empty();
 
-    GstCapsFeatures *features = gst_caps_get_features(caps, 0);
-    gboolean is_cuda = features && gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY);
-    GstStructure *in_s = gst_caps_get_structure(caps, 0);
-    const gchar *in_format = gst_structure_get_string(in_s, "format");
-    const GValue *w = gst_structure_get_value(in_s, "width");
-    const GValue *h = gst_structure_get_value(in_s, "height");
-    const GValue *fr = gst_structure_get_value(in_s, "framerate");
-
     GstCaps *outcaps = gst_caps_new_empty();
 
-    if (is_cuda && g_strcmp0(in_format, "NV12") == 0)
-    {
-        if (force_linear)
-        {
-            /* force-linear: only advertise linear modifiers */
-            caps_transform_add_drm(outcaps, "NV12:0x0", w, h, fr);
-            caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
-        }
-        else
-        {
-            /* CUDA NV12 → NV12 DMA-BUF (preferred) */
-            for (int i = 0; nv12_modifiers[i]; i++)
-                caps_transform_add_drm(outcaps, nv12_modifiers[i], w, h, fr);
+    /* Normalize caps to expand value lists (e.g., format={NV12,P010_10LE})
+     * into separate structures so we can handle each format individually. */
+    GstCaps *normalized = gst_caps_normalize(gst_caps_ref(caps));
 
-            /* Fallback to XR24 with conversion */
-            for (int i = 0; xr24_modifiers[i]; i++)
-                caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+    for (guint idx = 0; idx < gst_caps_get_size(normalized); idx++)
+    {
+        GstCapsFeatures *features = gst_caps_get_features(normalized, idx);
+        gboolean is_cuda = features && gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY);
+        GstStructure *in_s = gst_caps_get_structure(normalized, idx);
+        const gchar *in_format = gst_structure_get_string(in_s, "format");
+        const GValue *w = gst_structure_get_value(in_s, "width");
+        const GValue *h = gst_structure_get_value(in_s, "height");
+        const GValue *fr = gst_structure_get_value(in_s, "framerate");
+
+        if (is_cuda && g_strcmp0(in_format, "NV12") == 0)
+        {
+            if (force_linear)
+            {
+                caps_transform_add_drm(outcaps, "NV12:0x0", w, h, fr);
+                caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
+            }
+            else
+            {
+                for (int i = 0; nv12_modifiers[i]; i++)
+                    caps_transform_add_drm(outcaps, nv12_modifiers[i], w, h, fr);
+                for (int i = 0; xr24_modifiers[i]; i++)
+                    caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+            }
+        }
+        else if (is_cuda && g_strcmp0(in_format, "P010_10LE") == 0)
+        {
+            if (force_linear)
+            {
+                caps_transform_add_drm(outcaps, "P010:0x0", w, h, fr);
+            }
+            else
+            {
+                for (int i = 0; p010_modifiers[i]; i++)
+                    caps_transform_add_drm(outcaps, p010_modifiers[i], w, h, fr);
+            }
+        }
+        else if (g_strcmp0(in_format, "BGRx") == 0)
+        {
+            if (force_linear)
+            {
+                caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
+            }
+            else
+            {
+                for (int i = 0; xr24_modifiers[i] && i < 3; i++)
+                    caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
+            }
         }
     }
-    else if (g_strcmp0(in_format, "BGRx") == 0)
-    {
-        if (force_linear)
-        {
-            caps_transform_add_drm(outcaps, "XR24:0x0", w, h, fr);
-        }
-        else
-        {
-            /* BGRx → XR24 DMA-BUF */
-            for (int i = 0; xr24_modifiers[i] && i < 3; i++)
-                caps_transform_add_drm(outcaps, xr24_modifiers[i], w, h, fr);
-        }
-    }
 
+    gst_caps_unref(normalized);
     return outcaps;
 }
 
@@ -111,6 +136,24 @@ add_cuda_nv12_caps(GstCaps *outcaps, const GValue *w, const GValue *h, const GVa
 {
     GstCaps *tmp = gst_caps_new_simple(
         "video/x-raw", "format", G_TYPE_STRING, "NV12", NULL);
+    gst_caps_set_features(tmp, 0,
+                          gst_caps_features_new(GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, NULL));
+    GstStructure *s = gst_caps_get_structure(tmp, 0);
+    if (w)
+        gst_structure_set_value(s, "width", w);
+    if (h)
+        gst_structure_set_value(s, "height", h);
+    if (fr)
+        gst_structure_set_value(s, "framerate", fr);
+    gst_caps_append(outcaps, tmp);
+}
+
+/* Helper to add CUDA P010_10LE caps */
+static void
+add_cuda_p010_caps(GstCaps *outcaps, const GValue *w, const GValue *h, const GValue *fr)
+{
+    GstCaps *tmp = gst_caps_new_simple(
+        "video/x-raw", "format", G_TYPE_STRING, "P010_10LE", NULL);
     gst_caps_set_features(tmp, 0,
                           gst_caps_features_new(GST_CAPS_FEATURE_MEMORY_CUDA_MEMORY, NULL));
     GstStructure *s = gst_caps_get_structure(tmp, 0);
@@ -159,7 +202,7 @@ caps_transform_src_to_sink(GstCaps *caps)
         if (format && g_strcmp0(format, "DMA_DRM") == 0 && is_dmabuf)
         {
             const GValue *drm_val = gst_structure_get_value(out_s, "drm-format");
-            gboolean has_nv12 = FALSE, has_xr24 = FALSE;
+            gboolean has_nv12 = FALSE, has_p010 = FALSE, has_xr24 = FALSE;
 
             if (drm_val)
             {
@@ -167,6 +210,7 @@ caps_transform_src_to_sink(GstCaps *caps)
                 {
                     const gchar *drm = g_value_get_string(drm_val);
                     has_nv12 = drm_format_is_nv12(drm);
+                    has_p010 = drm_format_is_p010(drm);
                     has_xr24 = drm_format_is_xr24(drm);
                 }
                 else if (GST_VALUE_HOLDS_LIST(drm_val))
@@ -179,6 +223,8 @@ caps_transform_src_to_sink(GstCaps *caps)
                             const gchar *drm = g_value_get_string(v);
                             if (drm_format_is_nv12(drm))
                                 has_nv12 = TRUE;
+                            if (drm_format_is_p010(drm))
+                                has_p010 = TRUE;
                             if (drm_format_is_xr24(drm))
                                 has_xr24 = TRUE;
                         }
@@ -188,6 +234,9 @@ caps_transform_src_to_sink(GstCaps *caps)
 
             if (has_nv12)
                 add_cuda_nv12_caps(outcaps, w, h, fr);
+
+            if (has_p010)
+                add_cuda_p010_caps(outcaps, w, h, fr);
 
             if (has_xr24)
             {

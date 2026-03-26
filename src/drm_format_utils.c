@@ -36,6 +36,8 @@ drm_format_get_fourcc(const gchar *drm_format)
 
     if (g_str_has_prefix(drm_format, "NV12"))
         return DRM_FORMAT_NV12;
+    if (g_str_has_prefix(drm_format, "P010"))
+        return DRM_FORMAT_P010;
     if (g_str_has_prefix(drm_format, "XR24"))
         return DRM_FORMAT_XRGB8888;
     if (g_str_has_prefix(drm_format, "AR24"))
@@ -52,6 +54,18 @@ gboolean
 drm_format_is_nv12(const gchar *drm_format)
 {
     return drm_format && g_str_has_prefix(drm_format, "NV12");
+}
+
+gboolean
+drm_format_is_p010(const gchar *drm_format)
+{
+    return drm_format && g_str_has_prefix(drm_format, "P010");
+}
+
+gboolean
+drm_format_is_semi_planar_420(const gchar *drm_format)
+{
+    return drm_format_is_nv12(drm_format) || drm_format_is_p010(drm_format);
 }
 
 gboolean
