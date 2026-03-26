@@ -39,21 +39,40 @@ gboolean buffer_transform_context_init(BufferTransformContext *btx,
                                        guint64 modifier);
 
 /**
- * NV12 zero-copy passthrough transform.
- * Copies NV12 planes from CUDA memory to DMA-BUF using async CUDA operations.
+ * Semi-planar 4:2:0 zero-copy passthrough transform.
+ * Copies Y+UV planes from CUDA memory to DMA-BUF using async CUDA operations.
+ * Works for both NV12 (8-bit) and P010 (10-bit).
  *
  * @param btx Transform context
- * @param pool NV12 buffer pool
- * @param inbuf Input GstBuffer (CUDA NV12)
+ * @param pool Buffer pool (NV12 or P010 format)
+ * @param inbuf Input GstBuffer (CUDA NV12 or P010_10LE)
+ * @param outbuf Output GstBuffer pointer (will be allocated)
+ * @param info Video info for dimensions
+ * @param is_p010 TRUE for P010 (16-bit samples), FALSE for NV12 (8-bit)
+ * @return GST_FLOW_OK on success
+ */
+GstFlowReturn buffer_transform_semi_planar_passthrough(BufferTransformContext *btx,
+                                                       PooledBufferPool *pool,
+                                                       GstBuffer *inbuf,
+                                                       GstBuffer **outbuf,
+                                                       const GstVideoInfo *info,
+                                                       gboolean is_p010);
+
+/**
+ * CUDA memory direct DMA-BUF export (zero-copy, no intermediate buffer).
+ * Exports CUDA MMAP-allocated memory directly as DMA-BUF.
+ * Used for P010 where GBM doesn't support the format.
+ *
+ * @param btx Transform context (needs dmabuf_allocator)
+ * @param inbuf Input GstBuffer (CUDA MMAP memory)
  * @param outbuf Output GstBuffer pointer (will be allocated)
  * @param info Video info for dimensions
  * @return GST_FLOW_OK on success
  */
-GstFlowReturn buffer_transform_nv12_passthrough(BufferTransformContext *btx,
-                                                PooledBufferPool *pool,
-                                                GstBuffer *inbuf,
-                                                GstBuffer **outbuf,
-                                                const GstVideoInfo *info);
+GstFlowReturn buffer_transform_cuda_export(BufferTransformContext *btx,
+                                           GstBuffer *inbuf,
+                                           GstBuffer **outbuf,
+                                           const GstVideoInfo *info);
 
 /**
  * NV12→BGRx conversion transform.

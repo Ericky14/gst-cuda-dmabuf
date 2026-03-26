@@ -23,8 +23,8 @@
 #include <gbm.h>
 #include <string.h>
 
-/* Pool size for pre-allocated NV12 buffers - larger for smoother playback */
-#define NV12_POOL_SIZE 8
+/* Pool size for pre-allocated semi-planar buffers - larger for smoother playback */
+#define SEMI_PLANAR_POOL_SIZE 8
 
 /* Property IDs */
 enum
@@ -44,7 +44,8 @@ struct _GstCudaDmabufUpload
 
     /* Negotiated output format */
     guint64 negotiated_modifier;
-    gboolean nv12_output;
+    gboolean semi_planar_output; /* TRUE for NV12 or P010 passthrough */
+    gboolean p010_output;        /* TRUE when output is P010 (10-bit) */
 
     /* GStreamer pools */
     GstBufferPool *pool;
@@ -60,8 +61,8 @@ struct _GstCudaDmabufUpload
     /* CUDA-EGL interop context */
     CudaEglContext egl_ctx;
 
-    /* Pre-allocated NV12 buffer pool */
-    PooledBufferPool nv12_pool;
+    /* Pre-allocated semi-planar buffer pool (NV12 or P010) */
+    PooledBufferPool semi_planar_pool;
 
     /* Buffer transform context */
     BufferTransformContext btx;
@@ -73,7 +74,7 @@ G_DEFINE_TYPE(GstCudaDmabufUpload, gst_cuda_dmabuf_upload, GST_TYPE_BASE_TRANSFO
  * Pad Templates
  * ============================================================================ */
 
-/* Accept CUDA NV12 (preferred) or regular BGRx */
+/* Accept CUDA NV12 or P010_10LE (preferred) or regular BGRx */
 static GstStaticPadTemplate sink_template =
     GST_STATIC_PAD_TEMPLATE(
         "sink",
@@ -81,7 +82,7 @@ static GstStaticPadTemplate sink_template =
         GST_PAD_ALWAYS,
         GST_STATIC_CAPS(
             "video/x-raw(memory:CUDAMemory),"
-            "format=(string)NV12,"
+            "format=(string){NV12,P010_10LE},"
             "width=(int)[1,MAX],"
             "height=(int)[1,MAX],"
             "framerate=(fraction)[0/1,MAX]"
@@ -92,7 +93,7 @@ static GstStaticPadTemplate sink_template =
             "height=(int)[1,MAX],"
             "framerate=(fraction)[0/1,MAX]"));
 
-/* Output NV12 DMA-BUF (preferred) or XR24 DMA-BUF */
+/* Output NV12/P010 DMA-BUF (preferred) or XR24 DMA-BUF */
 static GstStaticPadTemplate src_template =
     GST_STATIC_PAD_TEMPLATE(
         "src",
@@ -110,6 +111,18 @@ static GstStaticPadTemplate src_template =
             "NV12:0x0300000000606015, NV12:0x0300000000e08010, NV12:0x0300000000e08011, "
             "NV12:0x0300000000e08012, NV12:0x0300000000e08013, NV12:0x0300000000e08014, "
             "NV12:0x0300000000e08015, NV12:0x0, NV12:0x100000000000001}"
+            "; "
+            /* P010 with NVIDIA tiled modifiers - 10-bit zero-copy passthrough */
+            "video/x-raw(memory:DMABuf),"
+            "format=(string)DMA_DRM,"
+            "width=(int)[1,MAX],"
+            "height=(int)[1,MAX],"
+            "framerate=(fraction)[0/1,MAX],"
+            "drm-format=(string){P010:0x0300000000606010, P010:0x0300000000606011, "
+            "P010:0x0300000000606012, P010:0x0300000000606013, P010:0x0300000000606014, "
+            "P010:0x0300000000606015, P010:0x0300000000e08010, P010:0x0300000000e08011, "
+            "P010:0x0300000000e08012, P010:0x0300000000e08013, P010:0x0300000000e08014, "
+            "P010:0x0300000000e08015, P010:0x0, P010:0x100000000000001}"
             "; "
             /* XR24 with linear modifier - for Vulkan/wgpu compatibility */
             "video/x-raw(memory:DMABuf),"
@@ -152,15 +165,18 @@ gst_cuda_dmabuf_upload_set_caps(GstBaseTransform *base, GstCaps *incaps, GstCaps
     if (format && g_strcmp0(format, "DMA_DRM") == 0 && drm_format)
     {
         self->negotiated_modifier = drm_format_parse_modifier(drm_format);
-        self->nv12_output = drm_format_is_nv12(drm_format);
+        self->semi_planar_output = drm_format_is_semi_planar_420(drm_format);
+        self->p010_output = drm_format_is_p010(drm_format);
 
-        GST_INFO_OBJECT(self, "Negotiated: %s (modifier: 0x%016lx, nv12=%d)",
-                        drm_format, self->negotiated_modifier, self->nv12_output);
+        GST_INFO_OBJECT(self, "Negotiated: %s (modifier: 0x%016lx, semi_planar=%d, p010=%d)",
+                        drm_format, self->negotiated_modifier,
+                        self->semi_planar_output, self->p010_output);
     }
     else
     {
         self->negotiated_modifier = DRM_FORMAT_MOD_INVALID;
-        self->nv12_output = FALSE;
+        self->semi_planar_output = FALSE;
+        self->p010_output = FALSE;
     }
 
     /* Parse video info */
@@ -356,8 +372,8 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
 {
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(base);
 
-    /* NV12 zero-copy passthrough path */
-    if (self->cuda_input && self->nv12_output)
+    /* NV12/P010 zero-copy passthrough path */
+    if (self->cuda_input && self->semi_planar_output)
     {
         guint width = GST_VIDEO_INFO_WIDTH(&self->cuda_info);
         guint height = GST_VIDEO_INFO_HEIGHT(&self->cuda_info);
@@ -373,22 +389,27 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
             }
         }
 
-        /* Initialize or reinitialize pool if needed */
-        if (pooled_buffer_pool_needs_reinit(&self->nv12_pool, width, height))
+        /* For P010: allocate GBM NV12 with 2x width.
+         * P010 has 16-bit (2-byte) samples, NV12 has 8-bit (1-byte).
+         * NV12 at width*2 has identical byte layout to P010 at width. */
+        guint alloc_width = self->p010_output ? width * 2 : width;
+
+        if (pooled_buffer_pool_needs_reinit(&self->semi_planar_pool, alloc_width, height))
         {
-            pooled_buffer_pool_cleanup(&self->nv12_pool, &self->egl_ctx);
-            if (!pooled_buffer_pool_init(&self->nv12_pool, &self->egl_ctx,
-                                         NV12_POOL_SIZE, width, height,
+            pooled_buffer_pool_cleanup(&self->semi_planar_pool, &self->egl_ctx);
+            if (!pooled_buffer_pool_init(&self->semi_planar_pool, &self->egl_ctx,
+                                         SEMI_PLANAR_POOL_SIZE, alloc_width, height,
                                          GBM_FORMAT_NV12, self->negotiated_modifier,
                                          self->force_linear))
             {
-                GST_ERROR_OBJECT(self, "Failed to initialize NV12 buffer pool");
+                GST_ERROR_OBJECT(self, "Failed to initialize semi-planar buffer pool");
                 return GST_FLOW_ERROR;
             }
         }
 
-        return buffer_transform_nv12_passthrough(&self->btx, &self->nv12_pool,
-                                                 inbuf, outbuf, &self->cuda_info);
+        return buffer_transform_semi_planar_passthrough(
+            &self->btx, &self->semi_planar_pool,
+            inbuf, outbuf, &self->cuda_info, self->p010_output);
     }
 
     /* NV12→BGRx conversion path (CUDA input, XR24 output) */
@@ -476,7 +497,7 @@ gst_cuda_dmabuf_upload_finalize(GObject *object)
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
 
     /* Clean up buffer pool */
-    pooled_buffer_pool_cleanup(&self->nv12_pool, &self->egl_ctx);
+    pooled_buffer_pool_cleanup(&self->semi_planar_pool, &self->egl_ctx);
 
     if (self->pool)
     {
@@ -552,6 +573,6 @@ gst_cuda_dmabuf_upload_init(GstCudaDmabufUpload *self)
     self->negotiated_modifier = DRM_FORMAT_MOD_INVALID;
     self->force_linear = FALSE;
     memset(&self->egl_ctx, 0, sizeof(CudaEglContext));
-    memset(&self->nv12_pool, 0, sizeof(PooledBufferPool));
+    memset(&self->semi_planar_pool, 0, sizeof(PooledBufferPool));
     memset(&self->btx, 0, sizeof(BufferTransformContext));
 }

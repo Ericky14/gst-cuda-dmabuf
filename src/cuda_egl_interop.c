@@ -221,7 +221,7 @@ cuda_egl_buffer_alloc(CudaEglContext *ctx,
     }
 
     /* Calculate total size */
-    if (format == GBM_FORMAT_NV12)
+    if (format == GBM_FORMAT_NV12 || format == DRM_FORMAT_P010)
     {
         buf->size = buf->offsets[1] + (gsize)buf->strides[1] * (height / 2);
     }
@@ -251,8 +251,8 @@ cuda_egl_buffer_alloc(CudaEglContext *ctx,
     attribs[ai++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
     attribs[ai++] = (EGLint)(buf->modifier >> 32);
 
-    /* Add plane 1 for NV12 */
-    if (format == GBM_FORMAT_NV12 && buf->plane_count >= 2)
+    /* Add plane 1 for semi-planar formats (NV12, P010) */
+    if ((format == GBM_FORMAT_NV12 || format == DRM_FORMAT_P010) && buf->plane_count >= 2)
     {
         attribs[ai++] = EGL_DMA_BUF_PLANE1_FD_EXT;
         attribs[ai++] = buf->dmabuf_fd;
