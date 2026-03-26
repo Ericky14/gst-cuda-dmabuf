@@ -17,7 +17,7 @@
 %endif
 
 Name:           gst-cuda-dmabuf
-Version:        1.2.1
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        GStreamer CUDA DMA-BUF plugin for zero-copy video processing
 
