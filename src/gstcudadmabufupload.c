@@ -14,6 +14,7 @@
 #include "drm_format_utils.h"
 #include "caps_transform.h"
 #include "buffer_transform.h"
+#include "external_fd_pool.h"
 
 #define GST_USE_UNSTABLE_API
 #include <gst/video/video.h>
@@ -32,6 +33,16 @@ enum
     PROP_0,
     PROP_FORCE_LINEAR,
 };
+
+/* Signal IDs */
+enum
+{
+    SIGNAL_INIT_EXTERNAL_POOL,
+    SIGNAL_ADD_EXTERNAL_BUFFER,
+    LAST_SIGNAL,
+};
+
+static guint signals[LAST_SIGNAL] = {0};
 
 /* Private data structure */
 struct _GstCudaDmabufUpload
@@ -66,6 +77,9 @@ struct _GstCudaDmabufUpload
 
     /* Buffer transform context */
     BufferTransformContext btx;
+
+    /* External FD pool (Vulkan-exported buffers, populated via action signals) */
+    ExternalFdPool external_fd_pool;
 };
 
 G_DEFINE_TYPE(GstCudaDmabufUpload, gst_cuda_dmabuf_upload, GST_TYPE_BASE_TRANSFORM)
@@ -378,6 +392,21 @@ gst_cuda_dmabuf_upload_prepare_output_buffer(GstBaseTransform *base,
         guint width = GST_VIDEO_INFO_WIDTH(&self->cuda_info);
         guint height = GST_VIDEO_INFO_HEIGHT(&self->cuda_info);
 
+        /* Prefer external FD pool (Vulkan-exported) if available */
+        if (self->external_fd_pool.initialized &&
+            self->external_fd_pool.count > 0)
+        {
+            /* Initialize dmabuf allocator if needed */
+            if (!self->btx.dmabuf_allocator)
+                self->btx.dmabuf_allocator = gst_dmabuf_allocator_new();
+
+            return buffer_transform_external_fd_passthrough(
+                &self->btx, &self->external_fd_pool,
+                inbuf, outbuf, &self->cuda_info, self->p010_output);
+        }
+
+        /* Fallback: GBM/EGL path */
+
         /* Initialize buffer transform context if needed */
         if (!self->btx.egl_ctx)
         {
@@ -453,6 +482,51 @@ gst_cuda_dmabuf_upload_transform(GstBaseTransform *base, GstBuffer *inbuf, GstBu
 }
 
 /* ============================================================================
+ * Action Signal Handlers
+ * ============================================================================ */
+
+static gboolean
+gst_cuda_dmabuf_upload_init_external_pool(GstCudaDmabufUpload *self,
+                                          guint width, guint height,
+                                          gboolean is_p010)
+{
+    if (self->external_fd_pool.initialized)
+        external_fd_pool_cleanup(&self->external_fd_pool);
+
+    GST_INFO_OBJECT(self, "Initializing external FD pool: %ux%u p010=%d",
+                    width, height, is_p010);
+
+    return external_fd_pool_init(&self->external_fd_pool, width, height, is_p010);
+}
+
+static gboolean
+gst_cuda_dmabuf_upload_add_external_buffer(GstCudaDmabufUpload *self,
+                                           gint y_fd, guint64 y_size, guint y_stride,
+                                           gint uv_fd, guint64 uv_size, guint uv_stride)
+
+{
+    GST_INFO_OBJECT(self, "Adding external buffer: Y fd=%d size=%lu stride=%u, UV fd=%d size=%lu stride=%u",
+                    y_fd, y_size, y_stride, uv_fd, uv_size, uv_stride);
+
+    if (!self->cuda_ctx)
+    {
+        GST_WARNING_OBJECT(self, "No CUDA context available for external buffer import");
+        return FALSE;
+    }
+
+    /* Push the GStreamer CUDA context so cuImportExternalMemory has a valid
+     * CUDA context on whatever thread the signal is emitted from. */
+    gst_cuda_context_push(self->cuda_ctx);
+
+    gboolean ret = external_fd_pool_add(&self->external_fd_pool,
+                                        y_fd, (gsize)y_size, y_stride,
+                                        uv_fd, (gsize)uv_size, uv_stride);
+
+    gst_cuda_context_pop(NULL);
+    return ret;
+}
+
+/* ============================================================================
  * Lifecycle
  * ============================================================================ */
 
@@ -495,6 +569,9 @@ static void
 gst_cuda_dmabuf_upload_finalize(GObject *object)
 {
     GstCudaDmabufUpload *self = GST_CUDA_DMABUF_UPLOAD(object);
+
+    /* Clean up external FD pool */
+    external_fd_pool_cleanup(&self->external_fd_pool);
 
     /* Clean up buffer pool */
     pooled_buffer_pool_cleanup(&self->semi_planar_pool, &self->egl_ctx);
@@ -545,6 +622,50 @@ gst_cuda_dmabuf_upload_class_init(GstCudaDmabufUploadClass *klass)
                                                          FALSE,
                                                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+    /**
+     * GstCudaDmabufUpload::init-external-pool:
+     * @upload: the element
+     * @width: video width
+     * @height: video height
+     * @is_p010: TRUE for P010 (10-bit), FALSE for NV12 (8-bit)
+     *
+     * Initialize the external FD pool for Vulkan-exported DMA-BUF interop.
+     * Must be called before add-external-buffer.
+     *
+     * Returns: TRUE on success
+     */
+    signals[SIGNAL_INIT_EXTERNAL_POOL] =
+        g_signal_new("init-external-pool",
+                     G_TYPE_FROM_CLASS(klass),
+                     G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+                     0, NULL, NULL, NULL,
+                     G_TYPE_BOOLEAN, 3,
+                     G_TYPE_UINT, G_TYPE_UINT, G_TYPE_BOOLEAN);
+
+    /**
+     * GstCudaDmabufUpload::add-external-buffer:
+     * @upload: the element
+     * @y_fd: Y plane DMA-BUF file descriptor
+     * @y_size: Y plane allocation size in bytes
+     * @y_stride: Y plane row pitch in bytes
+     * @uv_fd: UV plane DMA-BUF file descriptor
+     * @uv_size: UV plane allocation size in bytes
+     * @uv_stride: UV plane row pitch in bytes
+     *
+     * Add a Vulkan-exported DMA-BUF buffer pair to the external pool.
+     * The FDs are duplicated internally; the caller retains ownership.
+     *
+     * Returns: TRUE on success
+     */
+    signals[SIGNAL_ADD_EXTERNAL_BUFFER] =
+        g_signal_new("add-external-buffer",
+                     G_TYPE_FROM_CLASS(klass),
+                     G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+                     0, NULL, NULL, NULL,
+                     G_TYPE_BOOLEAN, 6,
+                     G_TYPE_INT, G_TYPE_UINT64, G_TYPE_UINT,
+                     G_TYPE_INT, G_TYPE_UINT64, G_TYPE_UINT);
+
     gst_element_class_add_pad_template(element_class,
                                        gst_static_pad_template_get(&sink_template));
     gst_element_class_add_pad_template(element_class,
@@ -575,4 +696,11 @@ gst_cuda_dmabuf_upload_init(GstCudaDmabufUpload *self)
     memset(&self->egl_ctx, 0, sizeof(CudaEglContext));
     memset(&self->semi_planar_pool, 0, sizeof(PooledBufferPool));
     memset(&self->btx, 0, sizeof(BufferTransformContext));
+    memset(&self->external_fd_pool, 0, sizeof(ExternalFdPool));
+
+    /* Connect action signal handlers */
+    g_signal_connect(self, "init-external-pool",
+                     G_CALLBACK(gst_cuda_dmabuf_upload_init_external_pool), NULL);
+    g_signal_connect(self, "add-external-buffer",
+                     G_CALLBACK(gst_cuda_dmabuf_upload_add_external_buffer), NULL);
 }

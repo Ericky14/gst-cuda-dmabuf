@@ -10,6 +10,7 @@
 
 #include "cuda_egl_interop.h"
 #include "pooled_buffers.h"
+#include "external_fd_pool.h"
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
@@ -101,6 +102,26 @@ GstFlowReturn buffer_transform_nv12_to_bgrx(BufferTransformContext *btx,
 GstFlowReturn buffer_transform_bgrx_copy(GstBuffer *inbuf,
                                          GstBuffer *outbuf,
                                          const GstVideoInfo *info);
+
+/**
+ * Semi-planar passthrough using externally-allocated DMA-BUF FDs.
+ * Copies Y+UV planes from CUDA memory into Vulkan-exported buffers via CUDA
+ * device-to-device copy. The output GstBuffer wraps the external DMA-BUF FDs.
+ *
+ * @param btx Transform context (needs dmabuf_allocator)
+ * @param pool External FD pool (Vulkan-exported buffers)
+ * @param inbuf Input GstBuffer (CUDA NV12 or P010_10LE)
+ * @param outbuf Output GstBuffer pointer (will be allocated)
+ * @param info Video info for dimensions
+ * @param is_p010 TRUE for P010 (16-bit samples), FALSE for NV12 (8-bit)
+ * @return GST_FLOW_OK on success
+ */
+GstFlowReturn buffer_transform_external_fd_passthrough(BufferTransformContext *btx,
+                                                       ExternalFdPool *pool,
+                                                       GstBuffer *inbuf,
+                                                       GstBuffer **outbuf,
+                                                       const GstVideoInfo *info,
+                                                       gboolean is_p010);
 
 G_END_DECLS
 

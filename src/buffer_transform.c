@@ -8,6 +8,7 @@
 #include "buffer_transform.h"
 #include "cuda_nv12_to_bgrx.h"
 #include "gstcudadmabufupload.h"
+#include "external_fd_pool.h"
 
 #define GST_USE_UNSTABLE_API
 #include <gst/cuda/gstcuda.h>
@@ -461,6 +462,144 @@ buffer_transform_bgrx_copy(GstBuffer *inbuf,
 
     gst_buffer_unmap(outbuf, &outmap);
     gst_video_frame_unmap(&in_frame);
+
+    return GST_FLOW_OK;
+}
+
+GstFlowReturn
+buffer_transform_external_fd_passthrough(BufferTransformContext *btx,
+                                         ExternalFdPool *pool,
+                                         GstBuffer *inbuf,
+                                         GstBuffer **outbuf,
+                                         const GstVideoInfo *info,
+                                         gboolean is_p010)
+{
+    GstMemory *mem = gst_buffer_peek_memory(inbuf, 0);
+    if (!gst_is_cuda_memory(mem))
+    {
+        GST_ERROR("Expected CUDA memory");
+        return GST_FLOW_ERROR;
+    }
+
+    guint width = GST_VIDEO_INFO_WIDTH(info);
+    guint height = GST_VIDEO_INFO_HEIGHT(info);
+
+    /* P010 has 16-bit (2 byte) samples, NV12 has 8-bit (1 byte) */
+    guint bytes_per_sample = is_p010 ? 2 : 1;
+    guint width_bytes = width * bytes_per_sample;
+
+    /* Get input strides */
+    GstVideoMeta *in_vmeta = gst_buffer_get_video_meta(inbuf);
+    gint y_stride_in = in_vmeta ? in_vmeta->stride[0] : (gint)width_bytes;
+    gint uv_stride_in = in_vmeta ? in_vmeta->stride[1] : (gint)width_bytes;
+    gsize uv_offset_in = in_vmeta ? in_vmeta->offset[1] : (gsize)width_bytes * height;
+
+    /* Acquire next buffer from external FD pool */
+    ExternalFdBuffer *ext_buf = external_fd_pool_acquire(pool);
+    if (!ext_buf)
+    {
+        GST_ERROR("Failed to acquire buffer from external FD pool");
+        return GST_FLOW_ERROR;
+    }
+
+    /* Map input CUDA buffer */
+    GstMapInfo in_map;
+    if (!gst_buffer_map(inbuf, &in_map, GST_MAP_READ | GST_MAP_CUDA))
+    {
+        GST_ERROR("Failed to map input buffer");
+        return GST_FLOW_ERROR;
+    }
+
+    const uint8_t *in_base = (const uint8_t *)in_map.data;
+    CUresult cu_res;
+
+    /* Async copy Y plane: CUDA device → external FD device ptr */
+    CUDA_MEMCPY2D y_copy = {0};
+    y_copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+    y_copy.srcDevice = (CUdeviceptr)in_base;
+    y_copy.srcPitch = (size_t)y_stride_in;
+    y_copy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+    y_copy.dstDevice = ext_buf->y_devptr;
+    y_copy.dstPitch = (size_t)ext_buf->y_stride;
+    y_copy.WidthInBytes = (size_t)width_bytes;
+    y_copy.Height = (size_t)height;
+
+    cu_res = cuMemcpy2DAsync(&y_copy, ext_buf->cuda_stream);
+    if (cu_res != CUDA_SUCCESS)
+    {
+        GST_ERROR("Y plane copy to external FD failed: %d", cu_res);
+        gst_buffer_unmap(inbuf, &in_map);
+        return GST_FLOW_ERROR;
+    }
+
+    /* Async copy UV plane: half height, same width in bytes */
+    CUDA_MEMCPY2D uv_copy = {0};
+    uv_copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+    uv_copy.srcDevice = (CUdeviceptr)(in_base + uv_offset_in);
+    uv_copy.srcPitch = (size_t)uv_stride_in;
+    uv_copy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+    uv_copy.dstDevice = ext_buf->uv_devptr;
+    uv_copy.dstPitch = (size_t)ext_buf->uv_stride;
+    uv_copy.WidthInBytes = (size_t)width_bytes;
+    uv_copy.Height = (size_t)(height / 2);
+
+    cu_res = cuMemcpy2DAsync(&uv_copy, ext_buf->cuda_stream);
+    if (cu_res != CUDA_SUCCESS)
+    {
+        GST_ERROR("UV plane copy to external FD failed: %d", cu_res);
+        gst_buffer_unmap(inbuf, &in_map);
+        return GST_FLOW_ERROR;
+    }
+
+    gst_buffer_unmap(inbuf, &in_map);
+
+    /* Sync before handing to Vulkan */
+    cuStreamSynchronize(ext_buf->cuda_stream);
+
+    /* Create DMA-BUF allocator if needed */
+    if (!btx->dmabuf_allocator)
+        btx->dmabuf_allocator = gst_dmabuf_allocator_new();
+
+    /* Wrap external FDs in GstBuffer.
+     * dup() the FDs because GstDmaBufAllocator takes ownership. */
+    int y_fd_dup = dup(ext_buf->y_fd);
+    int uv_fd_dup = dup(ext_buf->uv_fd);
+    if (y_fd_dup < 0 || uv_fd_dup < 0)
+    {
+        GST_ERROR("Failed to dup external FDs (y=%d, uv=%d)", ext_buf->y_fd, ext_buf->uv_fd);
+        if (y_fd_dup >= 0)
+            close(y_fd_dup);
+        if (uv_fd_dup >= 0)
+            close(uv_fd_dup);
+        return GST_FLOW_ERROR;
+    }
+
+    GstMemory *y_mem = gst_dmabuf_allocator_alloc(btx->dmabuf_allocator, y_fd_dup, ext_buf->y_size);
+    GstMemory *uv_mem = gst_dmabuf_allocator_alloc(btx->dmabuf_allocator, uv_fd_dup, ext_buf->uv_size);
+    if (!y_mem || !uv_mem)
+    {
+        if (y_mem)
+            gst_memory_unref(y_mem);
+        if (uv_mem)
+            gst_memory_unref(uv_mem);
+        return GST_FLOW_ERROR;
+    }
+
+    *outbuf = gst_buffer_new();
+    gst_buffer_append_memory(*outbuf, y_mem);
+    gst_buffer_append_memory(*outbuf, uv_mem);
+
+    /* Add video meta with correct format and plane info */
+    GstVideoFormat vid_fmt = is_p010 ? GST_VIDEO_FORMAT_P010_10LE : GST_VIDEO_FORMAT_NV12;
+    gsize offsets[4] = {0, 0, 0, 0};
+    gint strides[4] = {(gint)ext_buf->y_stride, (gint)ext_buf->uv_stride, 0, 0};
+    gst_buffer_add_video_meta_full(*outbuf, GST_VIDEO_FRAME_FLAG_NONE,
+                                   vid_fmt, width, height, 2, offsets, strides);
+
+    /* Copy timestamps */
+    GST_BUFFER_PTS(*outbuf) = GST_BUFFER_PTS(inbuf);
+    GST_BUFFER_DTS(*outbuf) = GST_BUFFER_DTS(inbuf);
+    GST_BUFFER_DURATION(*outbuf) = GST_BUFFER_DURATION(inbuf);
 
     return GST_FLOW_OK;
 }

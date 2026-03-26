@@ -68,6 +68,7 @@ shared_library(
     'pooled_buffers.c',
     'caps_transform.c',
     'buffer_transform.c',
+    'external_fd_pool.c',
     'gbm_dmabuf_pool.c',
     'gstcudadmabufupload.c',
     'plugin.c',
